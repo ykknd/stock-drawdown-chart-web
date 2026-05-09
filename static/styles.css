@@ -439,6 +439,11 @@ svg {
   opacity: 0.88;
 }
 
+.drawdown-fill {
+  fill: rgb(191 63 55 / 16%);
+  pointer-events: none;
+}
+
 .hover-line {
   stroke: #20282d;
   stroke-width: 1.2;

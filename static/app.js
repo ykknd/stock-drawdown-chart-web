@@ -129,6 +129,21 @@ function buildFixedRangePath(points, valueOf, min, max, area) {
     .join(" ");
 }
 
+function buildFixedRangeTopFillPath(points, valueOf, min, max, area) {
+  if (!points.length) return "";
+  const topY = yForValue(max, min, max, area);
+  const curve = points.map((point, index) => {
+    const rawValue = valueOf(point);
+    const value = Math.min(Math.max(rawValue, min), max);
+    const x = xForIndex(index, points.length, area);
+    const y = yForValue(value, min, max, area);
+    return `${index === 0 ? "L" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  });
+  const firstX = xForIndex(0, points.length, area);
+  const lastX = xForIndex(points.length - 1, points.length, area);
+  return [`M ${firstX.toFixed(2)} ${topY.toFixed(2)}`, ...curve, `L ${lastX.toFixed(2)} ${topY.toFixed(2)}`, "Z"].join(" ");
+}
+
 function successfulResults(results) {
   return results.filter((result) => !result.error && Array.isArray(result.data) && result.data.length > 0);
 }
@@ -310,13 +325,7 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
   const ddTicks = createLinearTicks(-ddRange / 100, 0, 6);
   const xTickIndexes = createLinearTicks(0, data.length - 1, Math.min(6, data.length)).map((value) => Math.round(value));
   const pricePath = buildPath(data, (point) => point.price, area);
-  const drawdownPath = buildFixedRangePath(
-    data,
-    (point) => point.drawdown,
-    -ddRange / 100,
-    0,
-    area
-  );
+  const drawdownFillPath = buildFixedRangeTopFillPath(data, (point) => point.drawdown, -ddRange / 100, 0, area);
   const latest = data[data.length - 1];
   const first = data[0];
   const hoverPoint = hoverIndex === null ? null : data[hoverIndex];
@@ -379,8 +388,8 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
           h("text", { x, y: area.bottom + 24, className: "axis-label", textAnchor: "middle" }, formatDateTick(point.date))
         );
       }),
+      h("path", { d: drawdownFillPath, className: "drawdown-fill" }),
       h("path", { d: pricePath, className: "price-line" }),
-      h("path", { d: drawdownPath, className: "drawdown-line" }),
       visibleEvents.map((event) =>
         h(
           React.Fragment,
