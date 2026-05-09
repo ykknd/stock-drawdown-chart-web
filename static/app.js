@@ -3,7 +3,10 @@ const h = React.createElement;
 const STORAGE_KEY = "drawdown-board-symbols";
 const PERIOD_STORAGE_KEY = "drawdown-board-period";
 const CUSTOM_MONTHS_STORAGE_KEY = "drawdown-board-custom-months";
+const CANDLE_INTERVAL_STORAGE_KEY = "drawdown-board-candle-interval";
 const DD_RANGE_STORAGE_KEY = "drawdown-board-dd-range";
+const X_ZOOM_STORAGE_KEY = "drawdown-board-x-zoom";
+const TECHNICAL_INDICATORS_STORAGE_KEY = "drawdown-board-technical-indicators";
 const DEFAULT_SYMBOLS = "7203, 6758, 9984";
 const BENCHMARK_SYMBOL = "^N225";
 const PERIOD_OPTIONS = [
@@ -18,6 +21,21 @@ const PERIOD_OPTIONS = [
 ];
 const SERIES_COLORS = ["#146c78", "#bf3f37", "#6b5b95", "#2d7d46", "#c47722", "#3f6fb5", "#8a4f7d", "#6f6b2f"];
 const BENCHMARK_COLOR = "#111111";
+const CANDLE_INTERVAL_OPTIONS = [
+  ["daily", "日足"],
+  ["weekly", "週足"],
+  ["monthly", "月足"],
+];
+const TECHNICAL_INDICATOR_OPTIONS = [
+  ["sma", "SMA"],
+  ["ema", "EMA"],
+  ["bbands", "BBands"],
+];
+const DEFAULT_TECHNICAL_INDICATORS = {
+  sma: { enabled: false, period: 20 },
+  ema: { enabled: false, period: 20 },
+  bbands: { enabled: false, period: 20 },
+};
 
 function formatPercent(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
@@ -77,6 +95,77 @@ function clampCustomMonths(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 12;
   return Math.min(Math.max(Math.round(parsed), 1), 600);
+}
+
+function clampZoomPercent(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 100;
+  return Math.min(Math.max(Math.round(parsed), 5), 100);
+}
+
+function clampTechnicalPeriod(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 20;
+  return Math.min(Math.max(Math.round(parsed), 1), 100);
+}
+
+function technicalIndicatorKey(type, period, suffix = null) {
+  const base = `${type}${period}`;
+  return suffix ? `${base}_${suffix}` : base;
+}
+
+function defaultTechnicalIndicators() {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_TECHNICAL_INDICATORS).map(([type, setting]) => [type, { ...setting }])
+  );
+}
+
+function parseLegacyIndicatorList(value) {
+  const next = defaultTechnicalIndicators();
+  value
+    .split(",")
+    .map((indicator) => indicator.trim().toLowerCase())
+    .filter(Boolean)
+    .forEach((indicator) => {
+      const match = indicator.match(/^(sma|ema|bbands)(\d{1,3})$/);
+      if (!match) return;
+      const [, type, period] = match;
+      next[type] = { enabled: true, period: clampTechnicalPeriod(period) };
+    });
+  return next;
+}
+
+function parseStoredIndicators(value) {
+  if (!value) return defaultTechnicalIndicators();
+  try {
+    const parsed = JSON.parse(value);
+    const next = defaultTechnicalIndicators();
+    for (const [type] of TECHNICAL_INDICATOR_OPTIONS) {
+      if (!parsed[type]) continue;
+      next[type] = {
+        enabled: Boolean(parsed[type].enabled),
+        period: clampTechnicalPeriod(parsed[type].period),
+      };
+    }
+    return next;
+  } catch {
+    return parseLegacyIndicatorList(value);
+  }
+}
+
+function storeTechnicalIndicators(indicators) {
+  localStorage.setItem(TECHNICAL_INDICATORS_STORAGE_KEY, JSON.stringify(indicators));
+}
+
+function zoomData(data, zoomPercent) {
+  if (!Array.isArray(data) || data.length === 0) return [];
+  const visibleCount = Math.max(2, Math.ceil(data.length * (zoomPercent / 100)));
+  return data.slice(Math.max(0, data.length - visibleCount));
+}
+
+function zoomResult(result, zoomPercent) {
+  if (!result || !Array.isArray(result.data)) return result;
+  return { ...result, data: zoomData(result.data, zoomPercent) };
 }
 
 function colorForSeries(result, index) {
@@ -142,6 +231,61 @@ function buildFixedRangeTopFillPath(points, valueOf, min, max, area) {
   const firstX = xForIndex(0, points.length, area);
   const lastX = xForIndex(points.length - 1, points.length, area);
   return [`M ${firstX.toFixed(2)} ${topY.toFixed(2)}`, ...curve, `L ${lastX.toFixed(2)} ${topY.toFixed(2)}`, "Z"].join(" ");
+}
+
+function candleWidth(count, area) {
+  const slot = (area.right - area.left) / Math.max(count, 1);
+  return Math.max(2, Math.min(slot * 0.62, 16));
+}
+
+function indicatorSeriesKeys(selectedIndicators) {
+  const keys = [];
+  for (const [type] of TECHNICAL_INDICATOR_OPTIONS) {
+    const setting = selectedIndicators[type];
+    if (!setting?.enabled) continue;
+    const period = clampTechnicalPeriod(setting.period);
+    if (type === "bbands") {
+      keys.push(
+        technicalIndicatorKey(type, period, "lower"),
+        technicalIndicatorKey(type, period, "middle"),
+        technicalIndicatorKey(type, period, "upper")
+      );
+    } else {
+      keys.push(technicalIndicatorKey(type, period));
+    }
+  }
+  return keys;
+}
+
+function colorForIndicatorKey(key) {
+  if (key.startsWith("sma")) return "#2d7d46";
+  if (key.startsWith("ema")) return "#c47722";
+  if (key.endsWith("_middle")) return "#9aa3aa";
+  if (key.startsWith("bbands")) return "#7a8790";
+  return "#555";
+}
+
+function labelForIndicatorKey(key) {
+  const bandMatch = key.match(/^bbands(\d+)_(lower|middle|upper)$/);
+  if (bandMatch) {
+    const suffixLabel = { lower: "下限", middle: "中央", upper: "上限" }[bandMatch[2]];
+    return `BBands ${bandMatch[1]} ${suffixLabel}`;
+  }
+  const match = key.match(/^(sma|ema)(\d+)$/);
+  if (match) return `${match[1].toUpperCase()} ${match[2]}`;
+  return key.toUpperCase();
+}
+
+function buildIndicatorPath(points, key, min, max, area) {
+  const segments = [];
+  points.forEach((point, index) => {
+    const value = point.indicators?.[key];
+    if (value === null || value === undefined || Number.isNaN(value)) return;
+    const x = xForIndex(index, points.length, area);
+    const y = yForValue(value, min, max, area);
+    segments.push(`${segments.length === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`);
+  });
+  return segments.join(" ");
 }
 
 function successfulResults(results) {
@@ -307,7 +451,7 @@ function OverlayDrawdownChart({ results, ddRange, marketEvents }) {
   );
 }
 
-function DrawdownChart({ result, ddRange, marketEvents }) {
+function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators }) {
   const width = 920;
   const height = 316;
   const area = { left: 72, right: width - 72, top: 18, bottom: height - 50 };
@@ -318,14 +462,20 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
     return h("div", { className: "empty-chart" }, "データなし");
   }
 
-  const prices = data.map((point) => point.price);
+  const indicatorKeys = indicatorSeriesKeys(technicalIndicators);
+  const indicatorValues = data.flatMap((point) =>
+    indicatorKeys.map((key) => point.indicators?.[key]).filter((value) => value !== null && value !== undefined && !Number.isNaN(value))
+  );
+  const prices = data
+    .flatMap((point) => [point.high ?? point.price, point.low ?? point.price])
+    .concat(indicatorValues);
   const priceMin = Math.min(...prices);
   const priceMax = Math.max(...prices);
   const priceTicks = createLinearTicks(priceMin, priceMax, 4);
   const ddTicks = createLinearTicks(-ddRange / 100, 0, 6);
   const xTickIndexes = createLinearTicks(0, data.length - 1, Math.min(6, data.length)).map((value) => Math.round(value));
-  const pricePath = buildPath(data, (point) => point.price, area);
   const drawdownFillPath = buildFixedRangeTopFillPath(data, (point) => point.drawdown, -ddRange / 100, 0, area);
+  const bodyWidth = candleWidth(data.length, area);
   const latest = data[data.length - 1];
   const first = data[0];
   const hoverPoint = hoverIndex === null ? null : data[hoverIndex];
@@ -389,7 +539,43 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
         );
       }),
       h("path", { d: drawdownFillPath, className: "drawdown-fill" }),
-      h("path", { d: pricePath, className: "price-line" }),
+      data.map((point, index) => {
+        const x = xForIndex(index, data.length, area);
+        const open = point.open ?? point.price;
+        const high = point.high ?? point.price;
+        const low = point.low ?? point.price;
+        const close = point.close ?? point.price;
+        const highY = yForValue(high, priceMin, priceMax, area);
+        const lowY = yForValue(low, priceMin, priceMax, area);
+        const openY = yForValue(open, priceMin, priceMax, area);
+        const closeY = yForValue(close, priceMin, priceMax, area);
+        const bodyTop = Math.min(openY, closeY);
+        const bodyHeight = Math.max(Math.abs(closeY - openY), 1);
+        const isUp = close >= open;
+        return h(
+          React.Fragment,
+          { key: `candle-${point.date}` },
+          h("line", { x1: x, y1: highY, x2: x, y2: lowY, className: isUp ? "candle-wick is-up" : "candle-wick is-down" }),
+          h("rect", {
+            x: x - bodyWidth / 2,
+            y: bodyTop,
+            width: bodyWidth,
+            height: bodyHeight,
+            className: isUp ? "candle-body is-up" : "candle-body is-down",
+          })
+        );
+      }),
+      indicatorKeys.map((key) => {
+        const indicatorPath = buildIndicatorPath(data, key, priceMin, priceMax, area);
+        return indicatorPath
+          ? h("path", {
+              key: `indicator-${key}`,
+              d: indicatorPath,
+              className: "indicator-line",
+              style: { stroke: colorForIndicatorKey(key) },
+            })
+          : null;
+      }),
       visibleEvents.map((event) =>
         h(
           React.Fragment,
@@ -423,8 +609,23 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
         "div",
         { className: "chart-tooltip" },
         h("span", null, hoverPoint.date),
-        h("strong", null, formatPrice(hoverPoint.price)),
+        h(
+          "strong",
+          null,
+          `O ${formatPrice(hoverPoint.open)} / H ${formatPrice(hoverPoint.high)} / L ${formatPrice(hoverPoint.low)} / C ${formatPrice(hoverPoint.close)}`
+        ),
         h("b", null, formatPercent(hoverPoint.drawdown))
+        ,
+        indicatorKeys.length
+          ? h(
+              "span",
+              { className: "tooltip-indicators" },
+              indicatorKeys
+                .filter((key) => hoverPoint.indicators?.[key] !== null && hoverPoint.indicators?.[key] !== undefined)
+                .map((key) => `${labelForIndicatorKey(key)}: ${formatPrice(hoverPoint.indicators[key])}`)
+                .join(" / ")
+            )
+          : null
       ),
     h(
       "div",
@@ -435,7 +636,7 @@ function DrawdownChart({ result, ddRange, marketEvents }) {
   );
 }
 
-function ResultCard({ result, ddRange, marketEvents }) {
+function ResultCard({ result, ddRange, marketEvents, technicalIndicators }) {
   const hasError = Boolean(result.error);
   const title = result.name || result.display_symbol || result.input_symbol;
   const subtitleParts = [result.display_symbol, result.symbol].filter(Boolean);
@@ -475,7 +676,7 @@ function ResultCard({ result, ddRange, marketEvents }) {
               h("strong", null, result.is_recovered ? formatDays(result.recovery_days) : formatPercent(result.recovery_progress))
             )
           ),
-          h(DrawdownChart, { key: "chart", result, ddRange, marketEvents }),
+          h(DrawdownChart, { key: "chart", result, ddRange, marketEvents, technicalIndicators }),
         ]
   );
 }
@@ -484,14 +685,25 @@ function App() {
   const [symbolsText, setSymbolsText] = useState(() => localStorage.getItem(STORAGE_KEY) || DEFAULT_SYMBOLS);
   const [period, setPeriod] = useState(() => localStorage.getItem(PERIOD_STORAGE_KEY) || "1y");
   const [customMonths, setCustomMonths] = useState(() => clampCustomMonths(localStorage.getItem(CUSTOM_MONTHS_STORAGE_KEY) || 53));
+  const [candleInterval, setCandleInterval] = useState(() => localStorage.getItem(CANDLE_INTERVAL_STORAGE_KEY) || "daily");
   const [ddRange, setDdRange] = useState(() => Number(localStorage.getItem(DD_RANGE_STORAGE_KEY) || 50));
+  const [xZoom, setXZoom] = useState(() => clampZoomPercent(localStorage.getItem(X_ZOOM_STORAGE_KEY) || 100));
+  const [technicalIndicators, setTechnicalIndicators] = useState(() =>
+    parseStoredIndicators(localStorage.getItem(TECHNICAL_INDICATORS_STORAGE_KEY))
+  );
   const [results, setResults] = useState([]);
   const [marketEvents, setMarketEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const symbols = useMemo(() => parseSymbols(symbolsText), [symbolsText]);
+  const zoomedResults = useMemo(() => results.map((result) => zoomResult(result, xZoom)), [results, xZoom]);
 
-  async function fetchDrawdowns(nextSymbols = symbols, nextPeriod = period) {
+  async function fetchDrawdowns(
+    nextSymbols = symbols,
+    nextPeriod = period,
+    nextCandleInterval = candleInterval,
+    nextTechnicalIndicators = technicalIndicators
+  ) {
     if (!nextSymbols.length) return;
     const requestSymbols = symbolsWithBenchmark(nextSymbols);
     setLoading(true);
@@ -504,6 +716,8 @@ function App() {
           symbols: requestSymbols,
           period: nextPeriod,
           custom_months: nextPeriod === "custom" ? customMonths : null,
+          candle_interval: nextCandleInterval,
+          technical_indicators: nextTechnicalIndicators,
         }),
       });
       if (!response.ok) {
@@ -514,6 +728,8 @@ function App() {
       localStorage.setItem(STORAGE_KEY, nextSymbols.filter((symbol) => symbol.toUpperCase() !== BENCHMARK_SYMBOL).join(", "));
       localStorage.setItem(PERIOD_STORAGE_KEY, nextPeriod);
       localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(customMonths));
+      localStorage.setItem(CANDLE_INTERVAL_STORAGE_KEY, nextCandleInterval);
+      storeTechnicalIndicators(nextTechnicalIndicators);
     } catch (err) {
       setError(err.message || "取得に失敗しました");
     } finally {
@@ -557,6 +773,47 @@ function App() {
     localStorage.setItem(DD_RANGE_STORAGE_KEY, String(nextRange));
   }
 
+  function onXZoomChange(event) {
+    const nextZoom = clampZoomPercent(event.target.value);
+    setXZoom(nextZoom);
+    localStorage.setItem(X_ZOOM_STORAGE_KEY, String(nextZoom));
+  }
+
+  function onCandleIntervalChange(event) {
+    const nextInterval = event.target.value;
+    setCandleInterval(nextInterval);
+    localStorage.setItem(CANDLE_INTERVAL_STORAGE_KEY, nextInterval);
+    fetchDrawdowns(symbols, period, nextInterval);
+  }
+
+  function updateTechnicalIndicators(nextIndicators) {
+    setTechnicalIndicators(nextIndicators);
+    storeTechnicalIndicators(nextIndicators);
+    fetchDrawdowns(symbols, period, candleInterval, nextIndicators);
+  }
+
+  function onTechnicalIndicatorEnabledChange(event) {
+    const value = event.target.value;
+    const checked = event.target.checked;
+    updateTechnicalIndicators({
+      ...technicalIndicators,
+      [value]: {
+        ...(technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value]),
+        enabled: checked,
+      },
+    });
+  }
+
+  function onTechnicalIndicatorPeriodChange(type, value) {
+    updateTechnicalIndicators({
+      ...technicalIndicators,
+      [type]: {
+        ...(technicalIndicators[type] || DEFAULT_TECHNICAL_INDICATORS[type]),
+        period: clampTechnicalPeriod(value),
+      },
+    });
+  }
+
   function onSubmit(event) {
     event.preventDefault();
     fetchDrawdowns(symbols, period);
@@ -566,80 +823,150 @@ function App() {
     "main",
     { className: "app-shell" },
     h(
-      "header",
-      { className: "topbar" },
-      h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
+      "section",
+      { className: "settings-panel" },
       h(
-        "form",
-        { className: "symbol-form", onSubmit },
-        h("input", {
-          value: symbolsText,
-          onChange: (event) => setSymbolsText(event.target.value),
-          placeholder: "7203, 6758, 9984",
-          "aria-label": "銘柄コード",
-        }),
+        "header",
+        { className: "topbar" },
+        h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
         h(
-          "select",
-          { value: period, onChange: onPeriodChange, "aria-label": "表示期間", disabled: loading },
-          PERIOD_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
-        ),
-        period === "custom"
-          ? h(
-              "div",
-              { className: "custom-period" },
-              h("input", {
-                type: "number",
-                min: "0",
-                max: "50",
-                value: Math.floor(customMonths / 12),
-                onChange: onCustomYearsChange,
-                "aria-label": "カスタム期間 年",
-              }),
-              h("span", null, "年"),
-              h("input", {
-                type: "number",
-                min: "0",
-                max: "11",
-                value: customMonths % 12,
-                onChange: onCustomRemainderMonthsChange,
-                "aria-label": "カスタム期間 月",
-              }),
-              h("span", null, "か月")
-            )
-          : null,
-        h("button", { type: "submit", disabled: loading || symbols.length === 0 }, loading ? "取得中" : "更新")
-      )
-    ),
-    error ? h("div", { className: "notice" }, error) : null,
-    h(
-      "div",
-      { className: "chart-controls" },
-      h(
-        "label",
-        { className: "range-control" },
-        h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
-        h("input", {
-          type: "range",
-          min: "1",
-          max: "100",
-          step: "1",
-          value: ddRange,
-          onChange: onDdRangeChange,
-          "aria-label": "DD軸レンジ",
-        })
+          "form",
+          { className: "symbol-form", onSubmit },
+          h("input", {
+            value: symbolsText,
+            onChange: (event) => setSymbolsText(event.target.value),
+            placeholder: "7203, 6758, 9984",
+            "aria-label": "銘柄コード",
+          }),
+          h(
+            "select",
+            { value: period, onChange: onPeriodChange, "aria-label": "表示期間", disabled: loading },
+            PERIOD_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
+          ),
+          period === "custom"
+            ? h(
+                "div",
+                { className: "custom-period" },
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  max: "50",
+                  value: Math.floor(customMonths / 12),
+                  onChange: onCustomYearsChange,
+                  "aria-label": "カスタム期間 年",
+                }),
+                h("span", null, "年"),
+                h("input", {
+                  type: "number",
+                  min: "0",
+                  max: "11",
+                  value: customMonths % 12,
+                  onChange: onCustomRemainderMonthsChange,
+                  "aria-label": "カスタム期間 月",
+                }),
+                h("span", null, "か月")
+              )
+            : null,
+          h("button", { type: "submit", disabled: loading || symbols.length === 0 }, loading ? "取得中" : "更新")
+        )
       ),
+      error ? h("div", { className: "notice" }, error) : null,
       h(
         "div",
-        { className: "legend" },
-        h("span", { className: "legend-price" }, "価格"),
-        h("span", { className: "legend-drawdown" }, "Drawdown")
+        { className: "chart-controls" },
+        h(
+          "label",
+          { className: "range-control" },
+          h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
+          h("input", {
+            type: "range",
+            min: "1",
+            max: "100",
+            step: "1",
+            value: ddRange,
+            onChange: onDdRangeChange,
+            "aria-label": "DD軸レンジ",
+          })
+        ),
+        h(
+          "label",
+          { className: "range-control" },
+          h("span", null, `表示期間 ${xZoom}%`),
+          h("input", {
+            type: "range",
+            min: "5",
+            max: "100",
+            step: "1",
+            value: xZoom,
+            onChange: onXZoomChange,
+            "aria-label": "x軸表示期間",
+          })
+        ),
+        h(
+          "label",
+          { className: "candle-control" },
+          h("span", null, "ローソク足"),
+          h(
+            "select",
+            { value: candleInterval, onChange: onCandleIntervalChange, "aria-label": "ローソク足の粒度", disabled: loading },
+            CANDLE_INTERVAL_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
+          )
+        ),
+        h(
+          "div",
+          { className: "indicator-control" },
+          h("span", null, "テクニカル"),
+          h(
+            "div",
+            { className: "indicator-options" },
+            TECHNICAL_INDICATOR_OPTIONS.map(([value, label]) => {
+              const setting = technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value];
+              return h(
+                "div",
+                { key: value, className: "indicator-option" },
+                h(
+                  "label",
+                  null,
+                  h("input", {
+                    type: "checkbox",
+                    value,
+                    checked: Boolean(setting.enabled),
+                    onChange: onTechnicalIndicatorEnabledChange,
+                  }),
+                  h("span", null, label)
+                ),
+                h("span", { className: "indicator-separator" }, ":"),
+                h("input", {
+                  type: "number",
+                  min: "1",
+                  max: "100",
+                  step: "1",
+                  value: setting.period,
+                  disabled: !setting.enabled,
+                  onChange: (event) => onTechnicalIndicatorPeriodChange(value, event.target.value),
+                  "aria-label": `${label} 集約期間`,
+                })
+              );
+            })
+          )
+        ),
+        h(
+          "div",
+          { className: "legend" },
+          h("span", { className: "legend-price" }, "価格"),
+          h("span", { className: "legend-drawdown" }, "Drawdown")
+        )
       )
     ),
     h(
-      "div",
-      { className: "results-grid" },
-      h(OverlayDrawdownChart, { results, ddRange, marketEvents }),
-      results.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents }))
+      "section",
+      { className: "chart-scroll" },
+      h(
+        "div",
+        { className: "results-grid" },
+        h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents }),
+        zoomedResults.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators }))
+      )
     )
   );
 }
