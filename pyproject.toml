@@ -1,0 +1,22 @@
+[project]
+name = "drawdown-chart"
+version = "0.1.0"
+description = "Japanese stock drawdown visualization MVP"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.116.0",
+    "uvicorn[standard]>=0.35.0",
+    "yfinance>=0.2.66",
+    "pandas>=2.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

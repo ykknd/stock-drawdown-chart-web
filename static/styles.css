@@ -1,0 +1,360 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f3ee;
+  --panel: #fffdfa;
+  --ink: #1c2326;
+  --muted: #687076;
+  --line: #ddd7ce;
+  --price: #146c78;
+  --drawdown: #bf3f37;
+  --accent: #253a5c;
+  --warn-bg: #fff0ed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    Inter, "Segoe UI", "Noto Sans JP", system-ui, -apple-system, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 560px);
+  gap: 24px;
+  align-items: end;
+  padding: 20px 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 4.4rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.topbar p,
+.card-head p,
+.chart-footer,
+.metric span {
+  color: var(--muted);
+}
+
+.topbar p {
+  margin-top: 10px;
+  font-size: 0.96rem;
+}
+
+.symbol-form {
+  display: grid;
+  grid-template-columns: 1fr 116px 104px;
+  gap: 10px;
+}
+
+.symbol-form input,
+.symbol-form select {
+  min-width: 0;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 14px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.symbol-form select {
+  cursor: pointer;
+}
+
+.symbol-form button {
+  height: 44px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+.symbol-form button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.notice {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #e7afa8;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: #7b231d;
+}
+
+.chart-controls {
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 0 8px;
+}
+
+.range-control {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 280px);
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.range-control input {
+  accent-color: var(--drawdown);
+}
+
+.legend {
+  display: flex;
+  gap: 18px;
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.legend span::before {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  margin-right: 8px;
+  vertical-align: middle;
+  border-radius: 99px;
+}
+
+.legend-price::before {
+  background: var(--price);
+}
+
+.legend-drawdown::before {
+  background: var(--drawdown);
+}
+
+.results-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.result-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 8px;
+}
+
+.card-head h2 {
+  font-size: 1.35rem;
+  letter-spacing: 0;
+}
+
+.card-head p {
+  margin-top: 4px;
+  font-size: 0.86rem;
+}
+
+.metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.metric {
+  min-width: 108px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8f6f2;
+}
+
+.metric span,
+.metric strong {
+  display: block;
+}
+
+.metric strong {
+  margin-top: 2px;
+  color: var(--drawdown);
+  font-size: 1.05rem;
+}
+
+.chart-wrap {
+  position: relative;
+  padding: 0 12px 12px;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+.axis {
+  stroke: #dfd8ce;
+  stroke-width: 1;
+}
+
+.grid-line {
+  stroke: #ebe5dc;
+  stroke-width: 1;
+}
+
+.tick-line {
+  stroke: #cfc7bc;
+  stroke-width: 1;
+}
+
+.axis-label {
+  fill: var(--muted);
+  font-size: 20px;
+  pointer-events: none;
+}
+
+.dd-label {
+  fill: var(--drawdown);
+}
+
+.price-line,
+.drawdown-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.price-line {
+  stroke: var(--price);
+  stroke-width: 3;
+}
+
+.drawdown-line {
+  stroke: var(--drawdown);
+  stroke-width: 2.4;
+  opacity: 0.88;
+}
+
+.hover-line {
+  stroke: #20282d;
+  stroke-width: 1.2;
+  stroke-dasharray: 5 5;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.chart-tooltip {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  margin: 0 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffffe;
+  box-shadow: 0 8px 24px rgb(31 34 36 / 10%);
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.chart-tooltip strong {
+  color: var(--price);
+}
+
+.chart-tooltip b {
+  color: var(--drawdown);
+  font-weight: 700;
+}
+
+.chart-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px 2px;
+  font-size: 0.84rem;
+}
+
+.empty-chart,
+.error-box {
+  margin: 16px 18px 18px;
+  padding: 18px;
+  border-radius: 6px;
+  background: #f4efe6;
+  color: var(--muted);
+}
+
+.is-error {
+  border-color: #e2aca4;
+}
+
+.error-box {
+  background: var(--warn-bg);
+  color: #7b231d;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    width: min(100% - 20px, 1180px);
+    padding-top: 14px;
+  }
+
+  .topbar,
+  .symbol-form {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-controls,
+  .range-control {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-controls {
+    display: grid;
+    gap: 12px;
+  }
+
+  .card-head {
+    display: grid;
+  }
+
+  .metrics {
+    justify-content: stretch;
+  }
+
+  .metric {
+    flex: 1;
+  }
+}
