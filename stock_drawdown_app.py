@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+from datetime import date, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -11,14 +13,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
-SUPPORTED_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
+SUPPORTED_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max", "custom"}
 DEFAULT_PERIOD = "1y"
+MIN_CUSTOM_MONTHS = 1
+MAX_CUSTOM_MONTHS = 600
 STATIC_DIR = Path(__file__).parent / "static"
+MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
 
 
 class DrawdownRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list, min_length=1, max_length=20)
     period: str = DEFAULT_PERIOD
+    custom_months: int | None = Field(default=None, ge=MIN_CUSTOM_MONTHS, le=MAX_CUSTOM_MONTHS)
 
 
 class DrawdownPoint(BaseModel):
@@ -35,12 +41,27 @@ class SymbolDrawdownResult(BaseModel):
     data: list[DrawdownPoint] = Field(default_factory=list)
     max_drawdown: float | None = None
     current_drawdown: float | None = None
+    peak_date: str | None = None
+    trough_date: str | None = None
+    recovery_date: str | None = None
+    decline_days: int | None = None
+    recovery_days: int | None = None
+    underwater_days: int | None = None
+    is_recovered: bool | None = None
+    recovery_progress: float | None = None
     error: str | None = None
 
 
 class DrawdownResponse(BaseModel):
     period: str
+    custom_months: int | None = None
     results: list[SymbolDrawdownResult]
+
+
+class MarketEvent(BaseModel):
+    date: str
+    name: str
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,8 +70,20 @@ class PricePoint:
     price: float
 
 
+@dataclass(frozen=True)
+class RecoveryMetrics:
+    peak_date: str
+    trough_date: str
+    recovery_date: str | None
+    decline_days: int
+    recovery_days: int | None
+    underwater_days: int
+    is_recovered: bool
+    recovery_progress: float
+
+
 class MarketDataProvider(Protocol):
-    def get_adjusted_close(self, symbol: str, period: str) -> list[PricePoint]:
+    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
         """Return adjusted daily closes ordered by date."""
 
     def get_security_name(self, symbol: str) -> str | None:
@@ -58,11 +91,16 @@ class MarketDataProvider(Protocol):
 
 
 class YFinanceMarketDataProvider:
-    def get_adjusted_close(self, symbol: str, period: str) -> list[PricePoint]:
+    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
         import yfinance as yf
 
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period=period, auto_adjust=False)
+        if period == "custom":
+            months = custom_months or 12
+            start = subtract_months(date.today(), months)
+            history = ticker.history(start=start.isoformat(), auto_adjust=False)
+        else:
+            history = ticker.history(period=period, auto_adjust=False)
         if history.empty:
             raise ValueError("株価データが見つかりませんでした")
 
@@ -97,6 +135,8 @@ def normalize_japanese_symbol(raw_symbol: str) -> str:
     symbol = raw_symbol.strip().upper()
     if not symbol:
         raise ValueError("銘柄コードが空です")
+    if symbol.startswith("^"):
+        return symbol
     if "." in symbol:
         return symbol
     return f"{symbol}.T"
@@ -111,6 +151,48 @@ def normalize_period(period: str) -> str:
     if normalized not in SUPPORTED_PERIODS:
         return DEFAULT_PERIOD
     return normalized
+
+
+def normalize_custom_months(period: str, custom_months: int | None) -> int | None:
+    if period != "custom":
+        return None
+    if custom_months is None:
+        return 12
+    return max(MIN_CUSTOM_MONTHS, min(custom_months, MAX_CUSTOM_MONTHS))
+
+
+def subtract_months(source_date: date, months: int) -> date:
+    month_index = source_date.year * 12 + source_date.month - 1 - months
+    year = month_index // 12
+    month = month_index % 12 + 1
+    day = min(source_date.day, last_day_of_month(year, month))
+    return date(year, month, day)
+
+
+def last_day_of_month(year: int, month: int) -> int:
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    return (next_month - timedelta(days=1)).day
+
+
+def load_market_events(path: Path = MARKET_EVENTS_PATH) -> list[MarketEvent]:
+    if not path.exists():
+        return []
+
+    events: list[MarketEvent] = []
+    with path.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            event_date = (row.get("date") or "").strip()
+            name = (row.get("name") or "").strip()
+            note = (row.get("note") or "").strip() or None
+            if not event_date or not name:
+                continue
+            date.fromisoformat(event_date)
+            events.append(MarketEvent(date=event_date, name=name, note=note))
+    return sorted(events, key=lambda event: event.date)
 
 
 def calculate_drawdown(points: list[PricePoint]) -> tuple[list[DrawdownPoint], float, float]:
@@ -134,6 +216,70 @@ def calculate_drawdown(points: list[PricePoint]) -> tuple[list[DrawdownPoint], f
         )
 
     return rows, round(max_drawdown, 8), rows[-1].drawdown
+
+
+def date_distance(start: str, end: str) -> int:
+    return (date.fromisoformat(end) - date.fromisoformat(start)).days
+
+
+def calculate_recovery_metrics(points: list[PricePoint]) -> RecoveryMetrics:
+    if not points:
+        raise ValueError("価格データが空です")
+
+    peak_price = points[0].price
+    peak_date = points[0].date
+    max_drawdown = 0.0
+    max_peak_price = points[0].price
+    max_peak_date = points[0].date
+    trough_price = points[0].price
+    trough_date = points[0].date
+    trough_index = 0
+
+    for index, point in enumerate(points):
+        if point.price > peak_price:
+            peak_price = point.price
+            peak_date = point.date
+
+        drawdown = (point.price / peak_price) - 1.0
+        if drawdown < max_drawdown:
+            max_drawdown = drawdown
+            max_peak_price = peak_price
+            max_peak_date = peak_date
+            trough_price = point.price
+            trough_date = point.date
+            trough_index = index
+
+    recovery_date: str | None = None
+    for point in points[trough_index:]:
+        if point.price >= max_peak_price:
+            recovery_date = point.date
+            break
+
+    is_recovered = recovery_date is not None
+    decline_days = date_distance(max_peak_date, trough_date)
+    recovery_days = date_distance(trough_date, recovery_date) if recovery_date else None
+    underwater_end_date = recovery_date or points[-1].date
+    underwater_days = date_distance(max_peak_date, underwater_end_date)
+
+    recovery_span = max_peak_price - trough_price
+    if recovery_span <= 0:
+        recovery_progress = 1.0
+    elif is_recovered:
+        recovery_progress = 1.0
+    else:
+        recovery_progress = (points[-1].price - trough_price) / recovery_span
+        recovery_progress = max(0.0, min(recovery_progress, 1.0))
+
+    return RecoveryMetrics(
+        peak_date=max_peak_date,
+        trough_date=trough_date,
+        recovery_date=recovery_date,
+        decline_days=decline_days,
+        recovery_days=recovery_days,
+        underwater_days=underwater_days,
+        is_recovered=is_recovered,
+        recovery_progress=round(recovery_progress, 8),
+    )
 
 
 def unique_symbols(symbols: list[str]) -> list[tuple[str, str]]:
@@ -162,9 +308,14 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/market-events", response_model=list[MarketEvent])
+    def market_events() -> list[MarketEvent]:
+        return load_market_events()
+
     @app.post("/api/drawdowns", response_model=DrawdownResponse)
     def drawdowns(request: DrawdownRequest) -> DrawdownResponse:
         period = normalize_period(request.period)
+        custom_months = normalize_custom_months(period, request.custom_months)
         results: list[SymbolDrawdownResult] = []
 
         seen_symbols: set[str] = set()
@@ -175,9 +326,10 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 if normalized_symbol in seen_symbols:
                     continue
                 seen_symbols.add(normalized_symbol)
-                prices = market_data_provider.get_adjusted_close(normalized_symbol, period)
+                prices = market_data_provider.get_adjusted_close(normalized_symbol, period, custom_months)
                 name = market_data_provider.get_security_name(normalized_symbol)
                 data, max_drawdown, current_drawdown = calculate_drawdown(prices)
+                recovery = calculate_recovery_metrics(prices)
                 results.append(
                     SymbolDrawdownResult(
                         input_symbol=input_symbol,
@@ -187,6 +339,14 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                         data=data,
                         max_drawdown=max_drawdown,
                         current_drawdown=current_drawdown,
+                        peak_date=recovery.peak_date,
+                        trough_date=recovery.trough_date,
+                        recovery_date=recovery.recovery_date,
+                        decline_days=recovery.decline_days,
+                        recovery_days=recovery.recovery_days,
+                        underwater_days=recovery.underwater_days,
+                        is_recovered=recovery.is_recovered,
+                        recovery_progress=recovery.recovery_progress,
                     )
                 )
             except Exception as exc:
@@ -200,7 +360,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                     )
                 )
 
-        return DrawdownResponse(period=period, results=results)
+        return DrawdownResponse(period=period, custom_months=custom_months, results=results)
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
