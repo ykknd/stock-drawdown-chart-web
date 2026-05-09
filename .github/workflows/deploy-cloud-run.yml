@@ -1,0 +1,84 @@
+name: Deploy Cloud Run
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE: stock-drawdown-chart-web
+  REGION: asia-northeast1
+  ARTIFACT_REPOSITORY: stock-drawdown
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag is on main
+        run: |
+          git fetch origin main
+          TAG_COMMIT="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          git merge-base --is-ancestor "$TAG_COMMIT" origin/main
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Ensure Artifact Registry repository
+        run: |
+          gcloud artifacts repositories describe "$ARTIFACT_REPOSITORY" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --location "$REGION" \
+          || gcloud artifacts repositories create "$ARTIFACT_REPOSITORY" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --location "$REGION" \
+            --repository-format docker \
+            --description "Drawdown Chart Cloud Run images"
+
+      - name: Build container
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$ARTIFACT_REPOSITORY/$SERVICE:${GITHUB_REF_NAME}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          gcloud builds submit --project "${{ secrets.GCP_PROJECT_ID }}" --tag "$IMAGE" .
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --image "$IMAGE" \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 1 \
+            --memory 512Mi \
+            --cpu 1 \
+            --set-env-vars APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}
