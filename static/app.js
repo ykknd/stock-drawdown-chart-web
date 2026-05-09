@@ -79,6 +79,11 @@ function clampCustomMonths(value) {
   return Math.min(Math.max(Math.round(parsed), 1), 600);
 }
 
+function makeAuthHeaders(authConfig, authToken) {
+  if (!authConfig?.enabled) return {};
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
 function colorForSeries(result, index) {
   return result.symbol === BENCHMARK_SYMBOL ? BENCHMARK_COLOR : SERIES_COLORS[index % SERIES_COLORS.length];
 }
@@ -478,19 +483,23 @@ function App() {
   const [ddRange, setDdRange] = useState(() => Number(localStorage.getItem(DD_RANGE_STORAGE_KEY) || 50));
   const [results, setResults] = useState([]);
   const [marketEvents, setMarketEvents] = useState([]);
+  const [authConfig, setAuthConfig] = useState({ loaded: false, enabled: false, google_client_id: null });
+  const [authToken, setAuthToken] = useState("");
+  const [authError, setAuthError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const symbols = useMemo(() => parseSymbols(symbolsText), [symbolsText]);
 
   async function fetchDrawdowns(nextSymbols = symbols, nextPeriod = period) {
     if (!nextSymbols.length) return;
+    if (authConfig.enabled && !authToken) return;
     const requestSymbols = symbolsWithBenchmark(nextSymbols);
     setLoading(true);
     setError("");
     try {
       const response = await fetch("/api/drawdowns", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...makeAuthHeaders(authConfig, authToken) },
         body: JSON.stringify({
           symbols: requestSymbols,
           period: nextPeriod,
@@ -513,12 +522,51 @@ function App() {
   }
 
   useEffect(() => {
+    fetch("/api/config")
+      .then((response) => response.json())
+      .then((payload) => setAuthConfig({ loaded: true, enabled: Boolean(payload.enabled), google_client_id: payload.google_client_id || null }))
+      .catch(() => setAuthConfig({ loaded: true, enabled: false, google_client_id: null }));
+  }, []);
+
+  useEffect(() => {
+    if (!authConfig.loaded || !authConfig.enabled || !authConfig.google_client_id || authToken) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (!window.google?.accounts?.id) {
+        if (attempts > 40) {
+          clearInterval(timer);
+          setAuthError("Googleログインの読み込みに失敗しました");
+        }
+        return;
+      }
+      clearInterval(timer);
+      window.google.accounts.id.initialize({
+        client_id: authConfig.google_client_id,
+        callback: (response) => {
+          setAuthToken(response.credential || "");
+          setAuthError("");
+        },
+      });
+      window.google.accounts.id.renderButton(document.getElementById("google-signin"), {
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+      });
+    }, 250);
+    return () => clearInterval(timer);
+  }, [authConfig.loaded, authConfig.enabled, authConfig.google_client_id, authToken]);
+
+  useEffect(() => {
+    if (!authConfig.loaded) return;
+    if (authConfig.enabled && !authToken) return;
+
     fetchDrawdowns(parseSymbols(symbolsText), period);
-    fetch("/api/market-events")
+    fetch("/api/market-events", { headers: makeAuthHeaders(authConfig, authToken) })
       .then((response) => (response.ok ? response.json() : []))
       .then((payload) => setMarketEvents(Array.isArray(payload) ? payload : []))
       .catch(() => setMarketEvents([]));
-  }, []);
+  }, [authConfig.loaded, authConfig.enabled, authToken]);
 
   function onPeriodChange(event) {
     const nextPeriod = event.target.value;
@@ -551,6 +599,25 @@ function App() {
   function onSubmit(event) {
     event.preventDefault();
     fetchDrawdowns(symbols, period);
+  }
+
+  if (!authConfig.loaded) {
+    return h("main", { className: "app-shell" }, h("div", { className: "auth-panel" }, "読み込み中"));
+  }
+
+  if (authConfig.enabled && !authToken) {
+    return h(
+      "main",
+      { className: "app-shell" },
+      h(
+        "section",
+        { className: "auth-panel" },
+        h("h1", null, "Drawdown Board"),
+        h("p", null, "このページを開くにはGoogleログインが必要です。"),
+        h("div", { id: "google-signin", className: "google-signin" }),
+        authError ? h("div", { className: "notice" }, authError) : null
+      )
+    );
   }
 
   return h(
