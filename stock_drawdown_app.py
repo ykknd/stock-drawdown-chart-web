@@ -758,7 +758,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         technical_indicators = normalize_technical_indicators(request.technical_indicators)
         results: list[SymbolDrawdownResult] = []
 
-        effective_api_key = request.jquants_api_key or get_jquants_api_key_from_env()
+        effective_api_key = get_jquants_api_key_from_env() or request.jquants_api_key
         if provider_type == "jquants" and not effective_api_key:
             raise HTTPException(status_code=400, detail="J-Quants APIキーが必要です")
 
