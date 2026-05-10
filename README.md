@@ -27,3 +27,7 @@ uv run uvicorn stock_drawdown_app:app --reload
 ## Notes
 
 株価データはプロトタイプ用途として `yfinance` 経由で取得します。一般公開・マネタイズ前には、データ利用条件と本番向けデータプロバイダーを再確認してください。
+
+## Specs
+
+機能要件、設計方針、実施順、実装実績は [`spec/README.md`](spec/README.md) で管理します。
