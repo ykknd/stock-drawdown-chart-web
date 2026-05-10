@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +29,7 @@ MAX_CUSTOM_MONTHS = 600
 DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS = 15 * 60
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
+auth_scheme = HTTPBearer(auto_error=False)
 
 
 class TechnicalIndicatorSetting(BaseModel):
@@ -85,6 +87,11 @@ class MarketEvent(BaseModel):
     date: str
     name: str
     note: str | None = None
+
+
+class AuthConfig(BaseModel):
+    enabled: bool
+    google_client_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -269,6 +276,46 @@ def last_day_of_month(year: int, month: int) -> int:
     else:
         next_month = date(year, month + 1, 1)
     return (next_month - timedelta(days=1)).day
+
+
+def is_auth_enabled() -> bool:
+    return os.getenv("APP_AUTH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_google_client_id() -> str | None:
+    return os.getenv("GOOGLE_CLIENT_ID", "").strip() or None
+
+
+def get_allowed_email() -> str | None:
+    return os.getenv("ALLOWED_EMAIL", "").strip().lower() or None
+
+
+def verify_google_token(token: str) -> str:
+    client_id = get_google_client_id()
+    allowed_email = get_allowed_email()
+    if not client_id or not allowed_email:
+        raise HTTPException(status_code=500, detail="認証設定が不足しています")
+
+    try:
+        from google.auth.transport import requests
+        from google.oauth2 import id_token
+
+        claims = id_token.verify_oauth2_token(token, requests.Request(), client_id)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Googleログインの検証に失敗しました") from exc
+
+    email = str(claims.get("email", "")).strip().lower()
+    if email != allowed_email:
+        raise HTTPException(status_code=403, detail="このアカウントにはアクセス権がありません")
+    return email
+
+
+def require_user(credentials: HTTPAuthorizationCredentials | None = Depends(auth_scheme)) -> str | None:
+    if not is_auth_enabled():
+        return None
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Googleログインが必要です")
+    return verify_google_token(credentials.credentials)
 
 
 def load_market_events(path: Path = MARKET_EVENTS_PATH) -> list[MarketEvent]:
@@ -548,12 +595,16 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/config", response_model=AuthConfig)
+    def config() -> AuthConfig:
+        return AuthConfig(enabled=is_auth_enabled(), google_client_id=get_google_client_id())
+
     @app.get("/api/market-events", response_model=list[MarketEvent])
-    def market_events() -> list[MarketEvent]:
+    def market_events(_: str | None = Depends(require_user)) -> list[MarketEvent]:
         return load_market_events()
 
     @app.post("/api/drawdowns", response_model=DrawdownResponse)
-    def drawdowns(request: DrawdownRequest) -> DrawdownResponse:
+    def drawdowns(request: DrawdownRequest, _: str | None = Depends(require_user)) -> DrawdownResponse:
         period = normalize_period(request.period)
         custom_months = normalize_custom_months(period, request.custom_months)
         candle_interval = normalize_candle_interval(request.candle_interval)
