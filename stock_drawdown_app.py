@@ -23,6 +23,7 @@ DEFAULT_PERIOD = "1y"
 DEFAULT_CANDLE_INTERVAL = "daily"
 DEFAULT_TECHNICAL_PERIOD = 20
 DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS = 1.0
+DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS = 12
 MIN_TECHNICAL_PERIOD = 1
 MAX_TECHNICAL_PERIOD = 100
 MIN_CUSTOM_MONTHS = 1
@@ -46,6 +47,7 @@ class DrawdownRequest(BaseModel):
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
     jquants_api_key: str | None = Field(default=None, min_length=1, max_length=256)
+    jquants_free_tier: bool = True
 
 
 class DrawdownPoint(BaseModel):
@@ -81,6 +83,8 @@ class SymbolDrawdownResult(BaseModel):
 class DrawdownResponse(BaseModel):
     period: str
     custom_months: int | None = None
+    requested_start_date: str
+    requested_end_date: str
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
     results: list[SymbolDrawdownResult]
@@ -147,7 +151,12 @@ class RecoveryMetrics:
 
 class MarketDataProvider(Protocol):
     def get_adjusted_close(
-        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         """Return adjusted daily closes ordered by date."""
 
@@ -157,7 +166,12 @@ class MarketDataProvider(Protocol):
 
 class YFinanceMarketDataProvider:
     def get_adjusted_close(
-        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         import yfinance as yf
 
@@ -239,6 +253,11 @@ class JQuantsMarketDataProvider:
         base_code = self._to_jquants_base_code(symbol)
         return list(dict.fromkeys([primary_code, base_code]))
 
+    def _get_end_date(self, free_tier: bool) -> date:
+        if free_tier:
+            return date.today() - timedelta(weeks=jquants_free_data_lag_weeks())
+        return date.today()
+
     def _get_start_date(self, period: str, custom_months: int | None) -> date:
         if period == "custom":
             return subtract_months(date.today(), custom_months or 12)
@@ -265,11 +284,19 @@ class JQuantsMarketDataProvider:
         return None
 
     def get_adjusted_close(
-        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         import jquantsapi
 
+        end_date = self._get_end_date(jquants_free_tier)
         start_date = self._get_start_date(period, custom_months)
+        if start_date >= end_date:
+            raise ValueError("J-Quants無料枠ではこの期間に取得可能なデータがありません")
         
         cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
 
@@ -277,7 +304,11 @@ class JQuantsMarketDataProvider:
         for code in self._jquants_code_candidates(symbol):
             for attempt in range(2):
                 try:
-                    candidate_df = cli.get_eq_bars_daily(code=code, from_yyyymmdd=start_date.strftime("%Y%m%d"))
+                    candidate_df = cli.get_eq_bars_daily(
+                        code=code,
+                        from_yyyymmdd=start_date.strftime("%Y%m%d"),
+                        to_yyyymmdd=end_date.strftime("%Y%m%d"),
+                    )
                     if not candidate_df.empty:
                         df = candidate_df
                         break
@@ -430,6 +461,28 @@ def normalize_custom_months(period: str, custom_months: int | None) -> int | Non
     if custom_months is None:
         return 12
     return max(MIN_CUSTOM_MONTHS, min(custom_months, MAX_CUSTOM_MONTHS))
+
+
+def requested_date_range(period: str, custom_months: int | None) -> tuple[str, str]:
+    end_date = date.today()
+    if period == "custom":
+        months = custom_months or 12
+        start_date = subtract_months(end_date, months)
+    elif period == "1mo":
+        start_date = subtract_months(end_date, 1)
+    elif period == "3mo":
+        start_date = subtract_months(end_date, 3)
+    elif period == "6mo":
+        start_date = subtract_months(end_date, 6)
+    elif period == "1y":
+        start_date = subtract_months(end_date, 12)
+    elif period == "2y":
+        start_date = subtract_months(end_date, 24)
+    elif period == "5y":
+        start_date = subtract_months(end_date, 60)
+    else:
+        start_date = date(2008, 1, 1)
+    return start_date.isoformat(), end_date.isoformat()
 
 
 def normalize_candle_interval(candle_interval: str) -> str:
@@ -764,6 +817,16 @@ def jquants_request_interval_seconds() -> float:
         return DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS
 
 
+def jquants_free_data_lag_weeks() -> int:
+    raw_value = os.getenv("JQUANTS_FREE_DATA_LAG_WEEKS")
+    if raw_value is None:
+        return DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS
+
+
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     
@@ -778,8 +841,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     cache_ttl_seconds = market_data_cache_ttl_seconds()
     jquants_interval_seconds = jquants_request_interval_seconds() if provider is None else 0.0
     last_jquants_request_at = 0.0
-    # Cache key: (provider_type, scope, symbol, period, custom_months)
-    price_cache: dict[tuple[str, str, str, str, int | None], CachedMarketPrices] = {}
+    # Cache key: (provider_type, scope, symbol, period, custom_months, jquants_free_tier)
+    price_cache: dict[tuple[str, str, str, str, int | None, bool], CachedMarketPrices] = {}
     # Cache key: (provider_type, scope, symbol)
     security_name_cache: dict[tuple[str, str, str], CachedSecurityName] = {}
 
@@ -805,16 +868,20 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             now = time.monotonic()
         last_jquants_request_at = now
 
-    def get_cached_prices(symbol: str, period: str, custom_months: int | None, api_key: str | None) -> list[PricePoint]:
+    def get_cached_prices(
+        symbol: str, period: str, custom_months: int | None, api_key: str | None, jquants_free_tier: bool
+    ) -> list[PricePoint]:
         scope = get_credential_scope(api_key)
-        cache_key = (provider_type, scope, symbol, period, custom_months)
+        cache_key = (provider_type, scope, symbol, period, custom_months, jquants_free_tier)
         now = time.time()
         cached = price_cache.get(cache_key)
         if cached and cached.expires_at > now:
             return list(cached.points)
 
         wait_for_jquants_rate_limit()
-        prices = market_data_provider.get_adjusted_close(symbol, period, custom_months, api_key=api_key)
+        prices = market_data_provider.get_adjusted_close(
+            symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier
+        )
         if cache_ttl_seconds > 0:
             price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
         return prices
@@ -863,6 +930,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def drawdowns(request: DrawdownRequest, _: str | None = Depends(require_user)) -> DrawdownResponse:
         period = normalize_period(request.period)
         custom_months = normalize_custom_months(period, request.custom_months)
+        requested_start_date, requested_end_date = requested_date_range(period, custom_months)
         candle_interval = normalize_candle_interval(request.candle_interval)
         technical_indicators = normalize_technical_indicators(request.technical_indicators)
         results: list[SymbolDrawdownResult] = []
@@ -880,7 +948,13 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                     continue
                 seen_symbols.add(normalized_symbol)
                 
-                prices = get_cached_prices(normalized_symbol, period, custom_months, api_key=effective_api_key)
+                prices = get_cached_prices(
+                    normalized_symbol,
+                    period,
+                    custom_months,
+                    api_key=effective_api_key,
+                    jquants_free_tier=request.jquants_free_tier,
+                )
                 prices = aggregate_price_points(prices, candle_interval)
                 name = get_cached_security_name(normalized_symbol, api_key=effective_api_key)
                 
@@ -923,6 +997,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         return DrawdownResponse(
             period=period,
             custom_months=custom_months,
+            requested_start_date=requested_start_date,
+            requested_end_date=requested_end_date,
             candle_interval=candle_interval,
             technical_indicators=technical_indicators,
             results=results,
