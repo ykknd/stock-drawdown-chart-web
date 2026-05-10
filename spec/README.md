@@ -34,6 +34,7 @@
 - [Cloud Run Deployment](./cloud-run-deployment/requirements.md)
 - [Candlestick Technical Indicators](./candlestick-technical-indicators/requirements.md)
 - [Workspace Layout](./workspace-layout/requirements.md)
+- [J-Quants User API Provider](./jquants-user-api-provider/requirements.md)
 
 ## Workflow
 
