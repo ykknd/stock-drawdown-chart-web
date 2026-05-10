@@ -81,3 +81,7 @@ git push origin v0.1.0
 ```
 
 The workflow verifies that the tag commit is included in `origin/main` before deploying.
+
+## Specs
+
+機能要件、設計方針、実施順、実装実績は [`spec/README.md`](spec/README.md) で管理します。
