@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -22,6 +22,7 @@ SUPPORTED_TECHNICAL_INDICATORS = {"sma", "ema", "bbands"}
 DEFAULT_PERIOD = "1y"
 DEFAULT_CANDLE_INTERVAL = "daily"
 DEFAULT_TECHNICAL_PERIOD = 20
+DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS = 1.0
 MIN_TECHNICAL_PERIOD = 1
 MAX_TECHNICAL_PERIOD = 100
 MIN_CUSTOM_MONTHS = 1
@@ -29,6 +30,7 @@ MAX_CUSTOM_MONTHS = 600
 DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS = 15 * 60
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
+JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
 auth_scheme = HTTPBearer(auto_error=False)
 
 
@@ -211,16 +213,31 @@ class YFinanceMarketDataProvider:
 
 
 class JQuantsMarketDataProvider:
-    def _to_jquants_code(self, symbol: str) -> str:
-        # 7203 or 7203.T -> 72030
+    def _to_jquants_base_code(self, symbol: str) -> str:
         code = symbol.strip().upper()
         if code.endswith(".T"):
             code = code[:-2]
         if code.isdigit() and len(code) == 4:
+            return code
+        if code.isdigit() and len(code) == 5 and code.endswith("0"):
+            return code[:4]
+        if code.isdigit() and len(code) == 5:
+            return code
+        raise ValueError(f"J-Quantsでは対応していない銘柄形式です: {symbol}")
+
+    def _to_jquants_code(self, symbol: str) -> str:
+        # 7203 or 7203.T -> 72030
+        code = self._to_jquants_base_code(symbol)
+        if len(code) == 4:
             return f"{code}0"
         if code.isdigit() and len(code) == 5:
             return code
         raise ValueError(f"J-Quantsでは対応していない銘柄形式です: {symbol}")
+
+    def _jquants_code_candidates(self, symbol: str) -> list[str]:
+        primary_code = self._to_jquants_code(symbol)
+        base_code = self._to_jquants_base_code(symbol)
+        return list(dict.fromkeys([primary_code, base_code]))
 
     def _get_start_date(self, period: str, custom_months: int | None) -> date:
         if period == "custom":
@@ -240,20 +257,37 @@ class JQuantsMarketDataProvider:
         # J-Quants 'max' is restricted to 2008-01-01 for now
         return date(2008, 1, 1)
 
+    def _extract_security_name(self, row: object) -> str | None:
+        for key in ("CoName", "CoNameEn", "CompanyName", "CompanyNameEnglish", "Name"):
+            value = row.get(key)
+            if value is not None and value == value and str(value).strip():
+                return str(value).strip()
+        return None
+
     def get_adjusted_close(
         self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
     ) -> list[PricePoint]:
         import jquantsapi
 
-        code = self._to_jquants_code(symbol)
         start_date = self._get_start_date(period, custom_months)
         
         cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
-        
-        try:
-            df = cli.get_eq_bars_daily(code=code, from_yyyymmdd=start_date.strftime("%Y%m%d"))
-        except Exception:
-            # Mask API key if it appears in error
+
+        df = None
+        for code in self._jquants_code_candidates(symbol):
+            for attempt in range(2):
+                try:
+                    candidate_df = cli.get_eq_bars_daily(code=code, from_yyyymmdd=start_date.strftime("%Y%m%d"))
+                    if not candidate_df.empty:
+                        df = candidate_df
+                        break
+                except Exception:
+                    if attempt == 0:
+                        time.sleep(DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS)
+            if df is not None:
+                break
+
+        if df is None:
             raise ValueError("J-Quantsからのデータ取得に失敗しました") from None
 
         if df.empty:
@@ -275,7 +309,7 @@ class JQuantsMarketDataProvider:
             
             points.append(
                 PricePoint(
-                    date=str(dt),
+                    date=normalize_date_value(dt),
                     price=float(close_p),
                     open=float(open_p),
                     high=float(high_p),
@@ -290,12 +324,25 @@ class JQuantsMarketDataProvider:
 
     def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         import jquantsapi
+
         try:
-            code = self._to_jquants_code(symbol)
+            local_name = get_local_security_name(symbol)
+            if local_name:
+                return local_name
+
             cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
-            df = cli.get_eq_master(code=code)
-            if not df.empty:
-                return str(df.iloc[0].get("CompanyName", "")) or None
+            for candidate in self._jquants_code_candidates(symbol):
+                df = cli.get_eq_master(code=candidate)
+                if not df.empty:
+                    name = self._extract_security_name(df.iloc[0])
+                    if name:
+                        return name
+            for candidate in self._jquants_code_candidates(symbol):
+                df = cli.get_list(code=candidate)
+                if not df.empty:
+                    name = self._extract_security_name(df.iloc[0])
+                    if name:
+                        return name
         except Exception:
             pass
         return None
@@ -304,6 +351,24 @@ class JQuantsMarketDataProvider:
 def hash_api_key(api_key: str) -> str:
     import hashlib
     return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def normalize_date_value(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        return date(int(text[:4]), int(text[4:6]), int(text[6:8])).isoformat()
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    return date.fromisoformat(text).isoformat()
 
 
 def normalize_market_data_provider(provider_raw: str | None) -> str:
@@ -317,6 +382,24 @@ def normalize_market_data_provider(provider_raw: str | None) -> str:
 
 def get_jquants_api_key_from_env() -> str | None:
     return os.getenv("JQUANTS_API_KEY", "").strip() or None
+
+
+def get_local_security_name(symbol: str) -> str | None:
+    if not JP_SECURITY_NAMES_PATH.exists():
+        return None
+
+    try:
+        code = JQuantsMarketDataProvider()._to_jquants_base_code(symbol)
+    except ValueError:
+        return None
+
+    with JP_SECURITY_NAMES_PATH.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            if (row.get("code") or "").strip() == code:
+                name = (row.get("name") or "").strip()
+                return name or None
+    return None
 
 
 def normalize_japanese_symbol(raw_symbol: str) -> str:
@@ -671,6 +754,16 @@ def market_data_cache_ttl_seconds() -> int:
         return DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS
 
 
+def jquants_request_interval_seconds() -> float:
+    raw_value = os.getenv("JQUANTS_REQUEST_INTERVAL_SECONDS")
+    if raw_value is None:
+        return DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS
+
+
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     
@@ -683,6 +776,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         market_data_provider = YFinanceMarketDataProvider()
 
     cache_ttl_seconds = market_data_cache_ttl_seconds()
+    jquants_interval_seconds = jquants_request_interval_seconds() if provider is None else 0.0
+    last_jquants_request_at = 0.0
     # Cache key: (provider_type, scope, symbol, period, custom_months)
     price_cache: dict[tuple[str, str, str, str, int | None], CachedMarketPrices] = {}
     # Cache key: (provider_type, scope, symbol)
@@ -698,6 +793,18 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             return hash_api_key(api_key)
         return "none"
 
+    def wait_for_jquants_rate_limit() -> None:
+        nonlocal last_jquants_request_at
+        if provider_type != "jquants" or jquants_interval_seconds <= 0:
+            return
+
+        now = time.monotonic()
+        remaining = jquants_interval_seconds - (now - last_jquants_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
+            now = time.monotonic()
+        last_jquants_request_at = now
+
     def get_cached_prices(symbol: str, period: str, custom_months: int | None, api_key: str | None) -> list[PricePoint]:
         scope = get_credential_scope(api_key)
         cache_key = (provider_type, scope, symbol, period, custom_months)
@@ -706,6 +813,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         if cached and cached.expires_at > now:
             return list(cached.points)
 
+        wait_for_jquants_rate_limit()
         prices = market_data_provider.get_adjusted_close(symbol, period, custom_months, api_key=api_key)
         if cache_ttl_seconds > 0:
             price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
@@ -719,8 +827,9 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         if cached and cached.expires_at > now:
             return cached.name
 
+        wait_for_jquants_rate_limit()
         name = market_data_provider.get_security_name(symbol, api_key=api_key)
-        if cache_ttl_seconds > 0:
+        if name is not None and cache_ttl_seconds > 0:
             security_name_cache[cache_key] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
         return name
 
