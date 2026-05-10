@@ -49,6 +49,26 @@ $env:ALLOWED_EMAIL="<your-google-account-email>"
 uv run uvicorn stock_drawdown_app:app --reload
 ```
 
+## Market Data Provider
+
+データ取得元を `yfinance` (デフォルト) または `J-Quants` から選択できます。
+
+### yfinance (Default)
+
+環境変数設定なし、または `MARKET_DATA_PROVIDER=yfinance` で動作します。
+
+### J-Quants
+
+`MARKET_DATA_PROVIDER=jquants` を設定します。
+
+J-Quants APIキーは以下の優先順で解決されます。
+
+1. サーバー環境変数 `JQUANTS_API_KEY`: ローカル起動やセルフホストで設定しておくと便利です。
+2. 画面入力された一時APIキー: サーバーにキーが設定されていない場合、利用者が自身のAPIキーを入力して利用できます。
+
+> [!WARNING]
+> 公開サーバーに `JQUANTS_API_KEY` を設定すると、それは運営者の共有キーとして消費されます。通常、不特定多数が利用する公開サイトではサーバーキーを設定せず、利用者に自身のキーを入力させる運用を推奨します。
+
 ### Required Google Cloud setup
 
 - Cloud Run service: `stock-drawdown-chart-web`

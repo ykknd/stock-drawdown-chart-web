@@ -85,8 +85,11 @@ function parseSymbols(value) {
     .filter(Boolean);
 }
 
-function symbolsWithBenchmark(symbols) {
+function symbolsWithBenchmark(symbols, marketDataProvider) {
   const normalized = symbols.map((symbol) => symbol.trim()).filter(Boolean);
+  if (marketDataProvider === "jquants") {
+    return normalized;
+  }
   const hasBenchmark = normalized.some((symbol) => symbol.toUpperCase() === BENCHMARK_SYMBOL);
   return hasBenchmark ? normalized : [BENCHMARK_SYMBOL, ...normalized];
 }
@@ -698,7 +701,15 @@ function App() {
   );
   const [results, setResults] = useState([]);
   const [marketEvents, setMarketEvents] = useState([]);
-  const [authConfig, setAuthConfig] = useState({ loaded: false, enabled: false, google_client_id: null });
+  const [appConfig, setAppConfig] = useState({
+    loaded: false,
+    enabled: false,
+    google_client_id: null,
+    market_data_provider: "yfinance",
+    jquants_api_key_available: false,
+    requires_jquants_api_key_input: false,
+  });
+  const [jquantsApiKey, setJquantsApiKey] = useState("");
   const [authToken, setAuthToken] = useState("");
   const [authError, setAuthError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -713,20 +724,25 @@ function App() {
     nextTechnicalIndicators = technicalIndicators
   ) {
     if (!nextSymbols.length) return;
-    if (authConfig.enabled && !authToken) return;
-    const requestSymbols = symbolsWithBenchmark(nextSymbols);
+    if (appConfig.enabled && !authToken) return;
+    if (appConfig.requires_jquants_api_key_input && !jquantsApiKey) {
+      setError("J-Quants APIキーを入力してください");
+      return;
+    }
+    const requestSymbols = symbolsWithBenchmark(nextSymbols, appConfig.market_data_provider);
     setLoading(true);
     setError("");
     try {
       const response = await fetch("/api/drawdowns", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...makeAuthHeaders(authConfig, authToken) },
+        headers: { "Content-Type": "application/json", ...makeAuthHeaders(appConfig, authToken) },
         body: JSON.stringify({
           symbols: requestSymbols,
           period: nextPeriod,
           custom_months: nextPeriod === "custom" ? customMonths : null,
           candle_interval: nextCandleInterval,
           technical_indicators: nextTechnicalIndicators,
+          jquants_api_key: jquantsApiKey || null,
         }),
       });
       if (!response.ok) {
@@ -749,12 +765,30 @@ function App() {
   useEffect(() => {
     fetch("/api/config")
       .then((response) => response.json())
-      .then((payload) => setAuthConfig({ loaded: true, enabled: Boolean(payload.enabled), google_client_id: payload.google_client_id || null }))
-      .catch(() => setAuthConfig({ loaded: true, enabled: false, google_client_id: null }));
+      .then((payload) =>
+        setAppConfig({
+          loaded: true,
+          enabled: Boolean(payload.enabled),
+          google_client_id: payload.google_client_id || null,
+          market_data_provider: payload.market_data_provider || "yfinance",
+          jquants_api_key_available: Boolean(payload.jquants_api_key_available),
+          requires_jquants_api_key_input: Boolean(payload.requires_jquants_api_key_input),
+        })
+      )
+      .catch(() =>
+        setAppConfig({
+          loaded: true,
+          enabled: false,
+          google_client_id: null,
+          market_data_provider: "yfinance",
+          jquants_api_key_available: false,
+          requires_jquants_api_key_input: false,
+        })
+      );
   }, []);
 
   useEffect(() => {
-    if (!authConfig.loaded || !authConfig.enabled || !authConfig.google_client_id || authToken) return;
+    if (!appConfig.loaded || !appConfig.enabled || !appConfig.google_client_id || authToken) return;
     let attempts = 0;
     const timer = setInterval(() => {
       attempts += 1;
@@ -767,7 +801,7 @@ function App() {
       }
       clearInterval(timer);
       window.google.accounts.id.initialize({
-        client_id: authConfig.google_client_id,
+        client_id: appConfig.google_client_id,
         callback: (response) => {
           setAuthToken(response.credential || "");
           setAuthError("");
@@ -780,18 +814,19 @@ function App() {
       });
     }, 250);
     return () => clearInterval(timer);
-  }, [authConfig.loaded, authConfig.enabled, authConfig.google_client_id, authToken]);
+  }, [appConfig.loaded, appConfig.enabled, appConfig.google_client_id, authToken]);
 
   useEffect(() => {
-    if (!authConfig.loaded) return;
-    if (authConfig.enabled && !authToken) return;
+    if (!appConfig.loaded) return;
+    if (appConfig.enabled && !authToken) return;
+    if (appConfig.requires_jquants_api_key_input && !jquantsApiKey) return;
 
     fetchDrawdowns(parseSymbols(symbolsText), period);
-    fetch("/api/market-events", { headers: makeAuthHeaders(authConfig, authToken) })
+    fetch("/api/market-events", { headers: makeAuthHeaders(appConfig, authToken) })
       .then((response) => (response.ok ? response.json() : []))
       .then((payload) => setMarketEvents(Array.isArray(payload) ? payload : []))
       .catch(() => setMarketEvents([]));
-  }, [authConfig.loaded, authConfig.enabled, authToken]);
+  }, [appConfig.loaded, appConfig.enabled, authToken]);
 
   function onPeriodChange(event) {
     const nextPeriod = event.target.value;
@@ -867,11 +902,11 @@ function App() {
     fetchDrawdowns(symbols, period);
   }
 
-  if (!authConfig.loaded) {
+  if (!appConfig.loaded) {
     return h("main", { className: "app-shell" }, h("div", { className: "auth-panel" }, "読み込み中"));
   }
 
-  if (authConfig.enabled && !authToken) {
+  if (appConfig.enabled && !authToken) {
     return h(
       "main",
       { className: "app-shell" },
@@ -937,6 +972,23 @@ function App() {
           h("button", { type: "submit", disabled: loading || symbols.length === 0 }, loading ? "取得中" : "更新")
         )
       ),
+      appConfig.requires_jquants_api_key_input
+        ? h(
+            "div",
+            { className: "jquants-key-panel" },
+            h("div", { className: "jquants-key-input" },
+              h("span", null, "J-Quants APIキー:"),
+              h("input", {
+                type: "password",
+                value: jquantsApiKey,
+                onChange: (event) => setJquantsApiKey(event.target.value),
+                placeholder: "J-Quants APIキーを入力",
+                "aria-label": "J-Quants APIキー",
+              }),
+              h("small", null, "環境変数 JQUANTS_API_KEY を設定すると入力を省けます。")
+            )
+          )
+        : null,
       error ? h("div", { className: "notice" }, error) : null,
       h(
         "div",
