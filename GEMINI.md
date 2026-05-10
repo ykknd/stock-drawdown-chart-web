@@ -82,6 +82,9 @@ http://127.0.0.1:8000
 - 静的フロントエンドの変更は、既存の `static/app.js` と `static/styles.css` の構成に合わせます。
 - データ取得は `MarketDataProvider` 抽象を経由します。
 - yfinanceはMVP用途です。一般公開前にはデータ利用条件と提供元を再確認します。
+- J-Quants providerは `jquants-api-client` を使い、APIキーの秘匿性を維持します。
+- J-Quantsでは銘柄コード末尾の `.T` を除去し、`0` を付与した5桁形式 (例: `72030`) で通信します。
+- APIキーをログ、レスポンス、エラー文言に含めないでください。
 - Cloud Run関連の設定は、既存のDockerfile、GitHub Actions、READMEの方針に合わせます。
 
 ## Implementation.md Template

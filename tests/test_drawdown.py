@@ -24,7 +24,9 @@ def disable_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeProvider:
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+    ) -> list[PricePoint]:
         if symbol == "9999.T":
             raise ValueError("not found")
         return [
@@ -34,7 +36,7 @@ class FakeProvider:
             PricePoint("2026-01-04", 108.0),
         ]
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         return {"7203.T": "Toyota Motor Corporation"}.get(symbol)
 
 
@@ -43,13 +45,15 @@ class CountingProvider(FakeProvider):
         self.price_calls = 0
         self.name_calls = 0
 
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+    ) -> list[PricePoint]:
         self.price_calls += 1
-        return super().get_adjusted_close(symbol, period, custom_months)
+        return super().get_adjusted_close(symbol, period, custom_months, api_key=api_key)
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         self.name_calls += 1
-        return super().get_security_name(symbol)
+        return super().get_security_name(symbol, api_key=api_key)
 
 
 def test_normalize_japanese_symbol_adds_t_suffix() -> None:
@@ -241,7 +245,10 @@ def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
     response = client.get("/api/config")
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "google_client_id": "example-client-id"}
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["google_client_id"] == "example-client-id"
+    assert "market_data_provider" in payload
 
 
 def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.MonkeyPatch) -> None:

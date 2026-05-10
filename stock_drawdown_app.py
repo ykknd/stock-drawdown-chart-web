@@ -43,6 +43,7 @@ class DrawdownRequest(BaseModel):
     custom_months: int | None = Field(default=None, ge=MIN_CUSTOM_MONTHS, le=MAX_CUSTOM_MONTHS)
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
+    jquants_api_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class DrawdownPoint(BaseModel):
@@ -89,9 +90,12 @@ class MarketEvent(BaseModel):
     note: str | None = None
 
 
-class AuthConfig(BaseModel):
+class AppConfig(BaseModel):
     enabled: bool
     google_client_id: str | None = None
+    market_data_provider: str = "yfinance"
+    jquants_api_key_available: bool = False
+    requires_jquants_api_key_input: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,15 +144,19 @@ class RecoveryMetrics:
 
 
 class MarketDataProvider(Protocol):
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+    ) -> list[PricePoint]:
         """Return adjusted daily closes ordered by date."""
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         """Return a human-friendly security name when available."""
 
 
 class YFinanceMarketDataProvider:
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+    ) -> list[PricePoint]:
         import yfinance as yf
 
         ticker = yf.Ticker(symbol)
@@ -186,7 +194,7 @@ class YFinanceMarketDataProvider:
             raise ValueError("有効なOHLCデータが見つかりませんでした")
         return points
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         import yfinance as yf
 
         ticker = yf.Ticker(symbol)
@@ -200,6 +208,115 @@ class YFinanceMarketDataProvider:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+
+class JQuantsMarketDataProvider:
+    def _to_jquants_code(self, symbol: str) -> str:
+        # 7203 or 7203.T -> 72030
+        code = symbol.strip().upper()
+        if code.endswith(".T"):
+            code = code[:-2]
+        if code.isdigit() and len(code) == 4:
+            return f"{code}0"
+        if code.isdigit() and len(code) == 5:
+            return code
+        raise ValueError(f"J-Quantsでは対応していない銘柄形式です: {symbol}")
+
+    def _get_start_date(self, period: str, custom_months: int | None) -> date:
+        if period == "custom":
+            return subtract_months(date.today(), custom_months or 12)
+        if period == "1mo":
+            return subtract_months(date.today(), 1)
+        if period == "3mo":
+            return subtract_months(date.today(), 3)
+        if period == "6mo":
+            return subtract_months(date.today(), 6)
+        if period == "1y":
+            return subtract_months(date.today(), 12)
+        if period == "2y":
+            return subtract_months(date.today(), 24)
+        if period == "5y":
+            return subtract_months(date.today(), 60)
+        # J-Quants 'max' is restricted to 2008-01-01 for now
+        return date(2008, 1, 1)
+
+    def get_adjusted_close(
+        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+    ) -> list[PricePoint]:
+        import jquantsapi
+
+        code = self._to_jquants_code(symbol)
+        start_date = self._get_start_date(period, custom_months)
+        
+        cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+        
+        try:
+            df = cli.get_eq_bars_daily(code=code, from_yyyymmdd=start_date.strftime("%Y%m%d"))
+        except Exception:
+            # Mask API key if it appears in error
+            raise ValueError("J-Quantsからのデータ取得に失敗しました") from None
+
+        if df.empty:
+            raise ValueError("株価データが見つかりませんでした")
+
+        points: list[PricePoint] = []
+        for _, row in df.iterrows():
+            # AdjO, AdjH, AdjL, AdjC
+            open_p = row.get("AdjO")
+            high_p = row.get("AdjH")
+            low_p = row.get("AdjL")
+            close_p = row.get("AdjC")
+            dt = row.get("Date")
+            
+            if any(v is None or v != v for v in (open_p, high_p, low_p, close_p, dt)):
+                continue
+            if close_p <= 0 or open_p <= 0 or high_p <= 0 or low_p <= 0:
+                continue
+            
+            points.append(
+                PricePoint(
+                    date=str(dt),
+                    price=float(close_p),
+                    open=float(open_p),
+                    high=float(high_p),
+                    low=float(low_p),
+                    close=float(close_p),
+                )
+            )
+        
+        if not points:
+            raise ValueError("有効なOHLCデータが見つかりませんでした")
+        return sorted(points, key=lambda p: p.date)
+
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
+        import jquantsapi
+        try:
+            code = self._to_jquants_code(symbol)
+            cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+            df = cli.get_eq_master(code=code)
+            if not df.empty:
+                return str(df.iloc[0].get("CompanyName", "")) or None
+        except Exception:
+            pass
+        return None
+
+
+def hash_api_key(api_key: str) -> str:
+    import hashlib
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def normalize_market_data_provider(provider_raw: str | None) -> str:
+    if not provider_raw:
+        return "yfinance"
+    provider = provider_raw.strip().lower()
+    if provider not in {"yfinance", "jquants"}:
+        raise ValueError(f"サポートされていない MARKET_DATA_PROVIDER です: {provider_raw}")
+    return provider
+
+
+def get_jquants_api_key_from_env() -> str | None:
+    return os.getenv("JQUANTS_API_KEY", "").strip() or None
 
 
 def normalize_japanese_symbol(raw_symbol: str) -> str:
@@ -556,32 +673,55 @@ def market_data_cache_ttl_seconds() -> int:
 
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
-    market_data_provider = provider or YFinanceMarketDataProvider()
-    cache_ttl_seconds = market_data_cache_ttl_seconds()
-    price_cache: dict[tuple[str, str, int | None], CachedMarketPrices] = {}
-    security_name_cache: dict[str, CachedSecurityName] = {}
+    
+    provider_type = normalize_market_data_provider(os.getenv("MARKET_DATA_PROVIDER"))
+    if provider:
+        market_data_provider = provider
+    elif provider_type == "jquants":
+        market_data_provider = JQuantsMarketDataProvider()
+    else:
+        market_data_provider = YFinanceMarketDataProvider()
 
-    def get_cached_prices(symbol: str, period: str, custom_months: int | None) -> list[PricePoint]:
-        cache_key = (symbol, period, custom_months)
+    cache_ttl_seconds = market_data_cache_ttl_seconds()
+    # Cache key: (provider_type, scope, symbol, period, custom_months)
+    price_cache: dict[tuple[str, str, str, str, int | None], CachedMarketPrices] = {}
+    # Cache key: (provider_type, scope, symbol)
+    security_name_cache: dict[tuple[str, str, str], CachedSecurityName] = {}
+
+    def get_credential_scope(api_key: str | None) -> str:
+        if provider_type == "yfinance":
+            return "public"
+        server_key = get_jquants_api_key_from_env()
+        if server_key and (api_key is None or api_key == server_key):
+            return "server"
+        if api_key:
+            return hash_api_key(api_key)
+        return "none"
+
+    def get_cached_prices(symbol: str, period: str, custom_months: int | None, api_key: str | None) -> list[PricePoint]:
+        scope = get_credential_scope(api_key)
+        cache_key = (provider_type, scope, symbol, period, custom_months)
         now = time.time()
         cached = price_cache.get(cache_key)
         if cached and cached.expires_at > now:
             return list(cached.points)
 
-        prices = market_data_provider.get_adjusted_close(symbol, period, custom_months)
+        prices = market_data_provider.get_adjusted_close(symbol, period, custom_months, api_key=api_key)
         if cache_ttl_seconds > 0:
             price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
         return prices
 
-    def get_cached_security_name(symbol: str) -> str | None:
+    def get_cached_security_name(symbol: str, api_key: str | None) -> str | None:
+        scope = get_credential_scope(api_key)
+        cache_key = (provider_type, scope, symbol)
         now = time.time()
-        cached = security_name_cache.get(symbol)
+        cached = security_name_cache.get(cache_key)
         if cached and cached.expires_at > now:
             return cached.name
 
-        name = market_data_provider.get_security_name(symbol)
+        name = market_data_provider.get_security_name(symbol, api_key=api_key)
         if cache_ttl_seconds > 0:
-            security_name_cache[symbol] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
+            security_name_cache[cache_key] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
         return name
 
     app.add_middleware(
@@ -595,9 +735,16 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/config", response_model=AuthConfig)
-    def config() -> AuthConfig:
-        return AuthConfig(enabled=is_auth_enabled(), google_client_id=get_google_client_id())
+    @app.get("/api/config", response_model=AppConfig)
+    def config() -> AppConfig:
+        jquants_key_env = get_jquants_api_key_from_env()
+        return AppConfig(
+            enabled=is_auth_enabled(),
+            google_client_id=get_google_client_id(),
+            market_data_provider=provider_type,
+            jquants_api_key_available=jquants_key_env is not None,
+            requires_jquants_api_key_input=(provider_type == "jquants" and jquants_key_env is None),
+        )
 
     @app.get("/api/market-events", response_model=list[MarketEvent])
     def market_events(_: str | None = Depends(require_user)) -> list[MarketEvent]:
@@ -611,6 +758,10 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         technical_indicators = normalize_technical_indicators(request.technical_indicators)
         results: list[SymbolDrawdownResult] = []
 
+        effective_api_key = request.jquants_api_key or get_jquants_api_key_from_env()
+        if provider_type == "jquants" and not effective_api_key:
+            raise HTTPException(status_code=400, detail="J-Quants APIキーが必要です")
+
         seen_symbols: set[str] = set()
         for input_symbol in request.symbols:
             normalized_symbol: str | None = None
@@ -619,9 +770,11 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 if normalized_symbol in seen_symbols:
                     continue
                 seen_symbols.add(normalized_symbol)
-                prices = get_cached_prices(normalized_symbol, period, custom_months)
+                
+                prices = get_cached_prices(normalized_symbol, period, custom_months, api_key=effective_api_key)
                 prices = aggregate_price_points(prices, candle_interval)
-                name = get_cached_security_name(normalized_symbol)
+                name = get_cached_security_name(normalized_symbol, api_key=effective_api_key)
+                
                 data, max_drawdown, current_drawdown = calculate_drawdown(prices, technical_indicators)
                 recovery = calculate_recovery_metrics(prices)
                 results.append(
@@ -645,12 +798,16 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 )
             except Exception as exc:
                 fallback_symbol = normalized_symbol or input_symbol.strip().upper() or input_symbol
+                # Ensure API key is not in error message
+                error_msg = str(exc)
+                if effective_api_key and effective_api_key in error_msg:
+                    error_msg = "データ取得エラーが発生しました"
                 results.append(
                     SymbolDrawdownResult(
                         input_symbol=input_symbol,
                         symbol=fallback_symbol,
                         display_symbol=to_display_symbol(fallback_symbol),
-                        error=str(exc),
+                        error=error_msg,
                     )
                 )
 
