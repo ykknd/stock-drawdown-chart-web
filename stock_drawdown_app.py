@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import os
+import time
 from datetime import date, timedelta
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,23 +16,42 @@ from pydantic import BaseModel, Field
 
 
 SUPPORTED_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max", "custom"}
+SUPPORTED_CANDLE_INTERVALS = {"daily", "weekly", "monthly"}
+SUPPORTED_TECHNICAL_INDICATORS = {"sma", "ema", "bbands"}
 DEFAULT_PERIOD = "1y"
+DEFAULT_CANDLE_INTERVAL = "daily"
+DEFAULT_TECHNICAL_PERIOD = 20
+MIN_TECHNICAL_PERIOD = 1
+MAX_TECHNICAL_PERIOD = 100
 MIN_CUSTOM_MONTHS = 1
 MAX_CUSTOM_MONTHS = 600
+DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS = 15 * 60
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
+
+
+class TechnicalIndicatorSetting(BaseModel):
+    enabled: bool = False
+    period: int = Field(default=DEFAULT_TECHNICAL_PERIOD, ge=MIN_TECHNICAL_PERIOD, le=MAX_TECHNICAL_PERIOD)
 
 
 class DrawdownRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list, min_length=1, max_length=20)
     period: str = DEFAULT_PERIOD
     custom_months: int | None = Field(default=None, ge=MIN_CUSTOM_MONTHS, le=MAX_CUSTOM_MONTHS)
+    candle_interval: str = DEFAULT_CANDLE_INTERVAL
+    technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
 
 
 class DrawdownPoint(BaseModel):
     date: str
     price: float
+    open: float
+    high: float
+    low: float
+    close: float
     drawdown: float
+    indicators: dict[str, float | None] = Field(default_factory=dict)
 
 
 class SymbolDrawdownResult(BaseModel):
@@ -55,6 +76,8 @@ class SymbolDrawdownResult(BaseModel):
 class DrawdownResponse(BaseModel):
     period: str
     custom_months: int | None = None
+    candle_interval: str = DEFAULT_CANDLE_INTERVAL
+    technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
     results: list[SymbolDrawdownResult]
 
 
@@ -68,6 +91,33 @@ class MarketEvent(BaseModel):
 class PricePoint:
     date: str
     price: float
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+
+    def __post_init__(self) -> None:
+        open_price = self.price if self.open is None else self.open
+        high_price = self.price if self.high is None else self.high
+        low_price = self.price if self.low is None else self.low
+        close_price = self.price if self.close is None else self.close
+        object.__setattr__(self, "open", open_price)
+        object.__setattr__(self, "high", high_price)
+        object.__setattr__(self, "low", low_price)
+        object.__setattr__(self, "close", close_price)
+        object.__setattr__(self, "price", close_price)
+
+
+@dataclass(frozen=True)
+class CachedMarketPrices:
+    expires_at: float
+    points: list[PricePoint]
+
+
+@dataclass(frozen=True)
+class CachedSecurityName:
+    expires_at: float
+    name: str | None
 
 
 @dataclass(frozen=True)
@@ -104,15 +154,29 @@ class YFinanceMarketDataProvider:
         if history.empty:
             raise ValueError("株価データが見つかりませんでした")
 
-        column = "Adj Close" if "Adj Close" in history.columns else "Close"
-        series = history[column].dropna()
-        series = series[series > 0]
-        if series.empty:
-            raise ValueError("有効な調整後終値が見つかりませんでした")
-
         points: list[PricePoint] = []
-        for index, value in series.items():
-            points.append(PricePoint(date=index.date().isoformat(), price=float(value)))
+        for index, row in history.iterrows():
+            open_price = row.get("Open")
+            high = row.get("High")
+            low = row.get("Low")
+            close = row.get("Close")
+            adj_close = row.get("Adj Close") if "Adj Close" in history.columns else None
+            if any(value is None or value != value for value in (open_price, high, low, close)):
+                continue
+            if close <= 0 or open_price <= 0 or high <= 0 or low <= 0:
+                continue
+            points.append(
+                adjusted_price_point(
+                    date_value=index.date().isoformat(),
+                    open_price=float(open_price),
+                    high=float(high),
+                    low=float(low),
+                    close=float(close),
+                    adj_close=float(adj_close) if adj_close is not None and adj_close == adj_close else None,
+                )
+            )
+        if not points:
+            raise ValueError("有効なOHLCデータが見つかりませんでした")
         return points
 
     def get_security_name(self, symbol: str) -> str | None:
@@ -161,6 +225,36 @@ def normalize_custom_months(period: str, custom_months: int | None) -> int | Non
     return max(MIN_CUSTOM_MONTHS, min(custom_months, MAX_CUSTOM_MONTHS))
 
 
+def normalize_candle_interval(candle_interval: str) -> str:
+    normalized = candle_interval.strip().lower()
+    if normalized not in SUPPORTED_CANDLE_INTERVALS:
+        return DEFAULT_CANDLE_INTERVAL
+    return normalized
+
+
+def clamp_technical_period(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_TECHNICAL_PERIOD
+    return max(MIN_TECHNICAL_PERIOD, min(int(value), MAX_TECHNICAL_PERIOD))
+
+
+def normalize_technical_indicators(
+    indicators: dict[str, TechnicalIndicatorSetting] | None,
+) -> dict[str, TechnicalIndicatorSetting]:
+    normalized: dict[str, TechnicalIndicatorSetting] = {}
+    for indicator, setting in (indicators or {}).items():
+        key = indicator.strip().lower()
+        if key not in SUPPORTED_TECHNICAL_INDICATORS or not setting.enabled:
+            continue
+        normalized[key] = TechnicalIndicatorSetting(enabled=True, period=clamp_technical_period(setting.period))
+    return normalized
+
+
+def indicator_key(indicator: str, period: int, suffix: str | None = None) -> str:
+    base = f"{indicator}{period}"
+    return f"{base}_{suffix}" if suffix else base
+
+
 def subtract_months(source_date: date, months: int) -> date:
     month_index = source_date.year * 12 + source_date.month - 1 - months
     year = month_index // 12
@@ -195,13 +289,118 @@ def load_market_events(path: Path = MARKET_EVENTS_PATH) -> list[MarketEvent]:
     return sorted(events, key=lambda event: event.date)
 
 
-def calculate_drawdown(points: list[PricePoint]) -> tuple[list[DrawdownPoint], float, float]:
+def adjusted_price_point(date_value: str, open_price: float, high: float, low: float, close: float, adj_close: float | None) -> PricePoint:
+    ratio = 1.0
+    if adj_close is not None and close > 0:
+        ratio = adj_close / close
+    adjusted_open = open_price * ratio
+    adjusted_high = high * ratio
+    adjusted_low = low * ratio
+    adjusted_close = close * ratio
+    return PricePoint(
+        date=date_value,
+        price=adjusted_close,
+        open=adjusted_open,
+        high=adjusted_high,
+        low=adjusted_low,
+        close=adjusted_close,
+    )
+
+
+def aggregate_price_points(points: list[PricePoint], candle_interval: str) -> list[PricePoint]:
+    interval = normalize_candle_interval(candle_interval)
+    if interval == "daily":
+        return points
+
+    groups: dict[str, list[PricePoint]] = {}
+    for point in points:
+        point_date = date.fromisoformat(point.date)
+        if interval == "weekly":
+            iso_year, iso_week, _ = point_date.isocalendar()
+            key = f"{iso_year}-W{iso_week:02d}"
+        else:
+            key = point_date.strftime("%Y-%m")
+        groups.setdefault(key, []).append(point)
+
+    aggregated: list[PricePoint] = []
+    for group in groups.values():
+        ordered = sorted(group, key=lambda point: point.date)
+        aggregated.append(
+            PricePoint(
+                date=ordered[-1].date,
+                price=ordered[-1].close or ordered[-1].price,
+                open=ordered[0].open,
+                high=max(point.high or point.price for point in ordered),
+                low=min(point.low or point.price for point in ordered),
+                close=ordered[-1].close,
+            )
+        )
+    return sorted(aggregated, key=lambda point: point.date)
+
+
+def calculate_technical_indicators(
+    points: list[PricePoint],
+    indicators: dict[str, TechnicalIndicatorSetting] | None,
+) -> dict[str, dict[str, float | None]]:
+    selected = normalize_technical_indicators(indicators)
+    empty = {point.date: {} for point in points}
+    if not points or not selected:
+        return empty
+
+    import pandas as pd
+    import pandas_ta as ta
+
+    frame = pd.DataFrame(
+        {
+            "date": [point.date for point in points],
+            "open": [point.open for point in points],
+            "high": [point.high for point in points],
+            "low": [point.low for point in points],
+            "close": [point.close for point in points],
+        }
+    ).set_index("date")
+
+    values: dict[str, object] = {}
+    if "sma" in selected:
+        period = selected["sma"].period
+        values[indicator_key("sma", period)] = ta.sma(frame["close"], length=period)
+    if "ema" in selected:
+        period = selected["ema"].period
+        values[indicator_key("ema", period)] = ta.ema(frame["close"], length=period)
+    if "bbands" in selected:
+        period = selected["bbands"].period
+        bands = ta.bbands(frame["close"], length=period)
+        if bands is not None:
+            values[indicator_key("bbands", period, "lower")] = bands.get(f"BBL_{period}_2.0")
+            values[indicator_key("bbands", period, "middle")] = bands.get(f"BBM_{period}_2.0")
+            values[indicator_key("bbands", period, "upper")] = bands.get(f"BBU_{period}_2.0")
+            if values[indicator_key("bbands", period, "lower")] is None:
+                values[indicator_key("bbands", period, "lower")] = bands.get(f"BBL_{period}_2.0_2.0")
+            if values[indicator_key("bbands", period, "middle")] is None:
+                values[indicator_key("bbands", period, "middle")] = bands.get(f"BBM_{period}_2.0_2.0")
+            if values[indicator_key("bbands", period, "upper")] is None:
+                values[indicator_key("bbands", period, "upper")] = bands.get(f"BBU_{period}_2.0_2.0")
+
+    by_date: dict[str, dict[str, float | None]] = {point.date: {} for point in points}
+    for name, series in values.items():
+        if series is None:
+            continue
+        for point_date, value in series.items():
+            by_date[str(point_date)][name] = None if value != value else round(float(value), 6)
+    return by_date
+
+
+def calculate_drawdown(
+    points: list[PricePoint],
+    technical_indicators: dict[str, TechnicalIndicatorSetting] | None = None,
+) -> tuple[list[DrawdownPoint], float, float]:
     if not points:
         raise ValueError("価格データが空です")
 
     peak = points[0].price
     rows: list[DrawdownPoint] = []
     max_drawdown = 0.0
+    indicator_values = calculate_technical_indicators(points, technical_indicators or {})
 
     for point in points:
         peak = max(peak, point.price)
@@ -211,7 +410,12 @@ def calculate_drawdown(points: list[PricePoint]) -> tuple[list[DrawdownPoint], f
             DrawdownPoint(
                 date=point.date,
                 price=round(point.price, 6),
+                open=round(point.open or point.price, 6),
+                high=round(point.high or point.price, 6),
+                low=round(point.low or point.price, 6),
+                close=round(point.close or point.price, 6),
                 drawdown=round(drawdown, 8),
+                indicators=indicator_values.get(point.date, {}),
             )
         )
 
@@ -293,9 +497,45 @@ def unique_symbols(symbols: list[str]) -> list[tuple[str, str]]:
     return unique
 
 
+def market_data_cache_ttl_seconds() -> int:
+    raw_value = os.getenv("MARKET_DATA_CACHE_TTL_SECONDS")
+    if raw_value is None:
+        return DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS
+
+
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     market_data_provider = provider or YFinanceMarketDataProvider()
+    cache_ttl_seconds = market_data_cache_ttl_seconds()
+    price_cache: dict[tuple[str, str, int | None], CachedMarketPrices] = {}
+    security_name_cache: dict[str, CachedSecurityName] = {}
+
+    def get_cached_prices(symbol: str, period: str, custom_months: int | None) -> list[PricePoint]:
+        cache_key = (symbol, period, custom_months)
+        now = time.time()
+        cached = price_cache.get(cache_key)
+        if cached and cached.expires_at > now:
+            return list(cached.points)
+
+        prices = market_data_provider.get_adjusted_close(symbol, period, custom_months)
+        if cache_ttl_seconds > 0:
+            price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
+        return prices
+
+    def get_cached_security_name(symbol: str) -> str | None:
+        now = time.time()
+        cached = security_name_cache.get(symbol)
+        if cached and cached.expires_at > now:
+            return cached.name
+
+        name = market_data_provider.get_security_name(symbol)
+        if cache_ttl_seconds > 0:
+            security_name_cache[symbol] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
+        return name
 
     app.add_middleware(
         CORSMiddleware,
@@ -316,6 +556,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def drawdowns(request: DrawdownRequest) -> DrawdownResponse:
         period = normalize_period(request.period)
         custom_months = normalize_custom_months(period, request.custom_months)
+        candle_interval = normalize_candle_interval(request.candle_interval)
+        technical_indicators = normalize_technical_indicators(request.technical_indicators)
         results: list[SymbolDrawdownResult] = []
 
         seen_symbols: set[str] = set()
@@ -326,9 +568,10 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 if normalized_symbol in seen_symbols:
                     continue
                 seen_symbols.add(normalized_symbol)
-                prices = market_data_provider.get_adjusted_close(normalized_symbol, period, custom_months)
-                name = market_data_provider.get_security_name(normalized_symbol)
-                data, max_drawdown, current_drawdown = calculate_drawdown(prices)
+                prices = get_cached_prices(normalized_symbol, period, custom_months)
+                prices = aggregate_price_points(prices, candle_interval)
+                name = get_cached_security_name(normalized_symbol)
+                data, max_drawdown, current_drawdown = calculate_drawdown(prices, technical_indicators)
                 recovery = calculate_recovery_metrics(prices)
                 results.append(
                     SymbolDrawdownResult(
@@ -360,7 +603,13 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                     )
                 )
 
-        return DrawdownResponse(period=period, custom_months=custom_months, results=results)
+        return DrawdownResponse(
+            period=period,
+            custom_months=custom_months,
+            candle_interval=candle_interval,
+            technical_indicators=technical_indicators,
+            results=results,
+        )
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
