@@ -8,11 +8,11 @@
 - 日本株コードの `.T` 補完、重複除外、失敗銘柄のエラー返却に対応済み。
 - ブラウザ側で銘柄リストと表示設定を保存する。
 
-## Verification
+## Checks Reported
 
-- 既知の価格配列でdrawdown計算をテスト済み。
+- 既知の価格配列でdrawdown計算を確認済み。
 - APIテストで成功銘柄と失敗銘柄の混在を確認済み。
-- ローカルでは `uv run pytest` を基本検証とする。
+- ローカルでは `uv run pytest` を基本確認コマンドとする。
 
 ## Remaining Notes
 

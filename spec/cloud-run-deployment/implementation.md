@@ -6,7 +6,7 @@
 - GitHub Actionsはタグベースの本番デプロイ方針とした。
 - GitHub SecretsとしてGCP連携情報、Google Client ID、許可メールを管理する方針をREADMEに記録する。
 
-## Verification
+## Checks Reported
 
 - ローカルではDocker CLIがない環境の場合、Docker起動確認は未実施とする。
 - workflowの本番確認はGCP側設定後に実施する。
