@@ -145,6 +145,36 @@ h1 {
   background: var(--panel);
 }
 
+.jquants-tier-panel {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.jquants-tier-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.jquants-tier-control input {
+  width: 16px;
+  height: 16px;
+}
+
+.jquants-tier-control small {
+  width: 100%;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
 .jquants-key-input {
   display: flex;
   flex-wrap: wrap;
@@ -554,6 +584,12 @@ svg {
 .grid-line {
   stroke: #ebe5dc;
   stroke-width: 1;
+}
+
+.missing-data-window {
+  fill: #e5e7e9;
+  opacity: 0.46;
+  pointer-events: none;
 }
 
 .tick-line {

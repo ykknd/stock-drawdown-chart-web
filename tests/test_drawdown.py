@@ -25,7 +25,12 @@ def disable_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class FakeProvider:
     def get_adjusted_close(
-        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         if symbol == "9999.T":
             raise ValueError("not found")
@@ -46,10 +51,15 @@ class CountingProvider(FakeProvider):
         self.name_calls = 0
 
     def get_adjusted_close(
-        self, symbol: str, period: str, custom_months: int | None = None, api_key: str | None = None
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         self.price_calls += 1
-        return super().get_adjusted_close(symbol, period, custom_months, api_key=api_key)
+        return super().get_adjusted_close(symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier)
 
     def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         self.name_calls += 1
@@ -214,6 +224,7 @@ def test_drawdowns_endpoint_returns_success_and_symbol_errors() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["period"] == "1y"
+    assert payload["requested_start_date"] <= payload["requested_end_date"]
     assert len(payload["results"]) == 2
     assert payload["results"][0]["symbol"] == "7203.T"
     assert payload["results"][0]["name"] == "Toyota Motor Corporation"
@@ -235,6 +246,7 @@ def test_drawdowns_endpoint_accepts_custom_months() -> None:
     payload = response.json()
     assert payload["period"] == "custom"
     assert payload["custom_months"] == 53
+    assert payload["requested_start_date"] <= payload["requested_end_date"]
 
 
 def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
