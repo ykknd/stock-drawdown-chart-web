@@ -146,6 +146,28 @@ h1 {
   color: #7b231d;
 }
 
+.auth-panel {
+  width: min(520px, 100%);
+  margin: 18vh auto 0;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.auth-panel h1 {
+  font-size: 2.5rem;
+}
+
+.auth-panel p {
+  margin: 12px 0 20px;
+  color: var(--muted);
+}
+
+.google-signin {
+  min-height: 44px;
+}
+
 .chart-controls {
   display: flex;
   flex-wrap: wrap;

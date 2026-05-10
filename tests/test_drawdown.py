@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from stock_drawdown_app import (
     PricePoint,
@@ -13,6 +14,13 @@ from stock_drawdown_app import (
     normalize_japanese_symbol,
     subtract_months,
 )
+
+
+@pytest.fixture(autouse=True)
+def disable_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("APP_AUTH_ENABLED", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ALLOWED_EMAIL", raising=False)
 
 
 class FakeProvider:
@@ -223,6 +231,28 @@ def test_drawdowns_endpoint_accepts_custom_months() -> None:
     payload = response.json()
     assert payload["period"] == "custom"
     assert payload["custom_months"] == 53
+
+
+def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_AUTH_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "example-client-id")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.get("/api/config")
+
+    assert response.status_code == 200
+    assert response.json() == {"enabled": True, "google_client_id": "example-client-id"}
+
+
+def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_AUTH_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "example-client-id")
+    monkeypatch.setenv("ALLOWED_EMAIL", "user@example.com")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y"})
+
+    assert response.status_code == 401
 
 
 def test_drawdowns_endpoint_accepts_candle_intervals() -> None:
