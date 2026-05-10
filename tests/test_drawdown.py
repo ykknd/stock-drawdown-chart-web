@@ -3,8 +3,12 @@ import pytest
 
 from stock_drawdown_app import (
     PricePoint,
+    TechnicalIndicatorSetting,
+    adjusted_price_point,
+    aggregate_price_points,
     calculate_drawdown,
     calculate_recovery_metrics,
+    calculate_technical_indicators,
     create_app,
     load_market_events,
     normalize_japanese_symbol,
@@ -34,6 +38,20 @@ class FakeProvider:
         return {"7203.T": "Toyota Motor Corporation"}.get(symbol)
 
 
+class CountingProvider(FakeProvider):
+    def __init__(self) -> None:
+        self.price_calls = 0
+        self.name_calls = 0
+
+    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+        self.price_calls += 1
+        return super().get_adjusted_close(symbol, period, custom_months)
+
+    def get_security_name(self, symbol: str) -> str | None:
+        self.name_calls += 1
+        return super().get_security_name(symbol)
+
+
 def test_normalize_japanese_symbol_adds_t_suffix() -> None:
     assert normalize_japanese_symbol("7203") == "7203.T"
     assert normalize_japanese_symbol("7203.T") == "7203.T"
@@ -57,6 +75,85 @@ def test_calculate_drawdown_from_known_prices() -> None:
     assert [point.drawdown for point in data] == [0.0, 0.0, -0.25, -0.1]
     assert max_drawdown == -0.25
     assert current_drawdown == -0.1
+    assert data[0].open == 100.0
+    assert data[0].high == 100.0
+    assert data[0].low == 100.0
+    assert data[0].close == 100.0
+
+
+def test_adjusted_price_point_scales_ohlc_by_adj_close_ratio() -> None:
+    point = adjusted_price_point(
+        date_value="2026-01-01",
+        open_price=100.0,
+        high=120.0,
+        low=90.0,
+        close=110.0,
+        adj_close=55.0,
+    )
+
+    assert point.open == 50.0
+    assert point.high == 60.0
+    assert point.low == 45.0
+    assert point.close == 55.0
+    assert point.price == 55.0
+
+
+def test_aggregate_price_points_weekly_uses_standard_ohlc() -> None:
+    points = [
+        PricePoint("2026-01-05", 12.0, open=10.0, high=13.0, low=9.0, close=12.0),
+        PricePoint("2026-01-06", 15.0, open=12.0, high=16.0, low=11.0, close=15.0),
+        PricePoint("2026-01-12", 18.0, open=17.0, high=19.0, low=16.0, close=18.0),
+    ]
+
+    aggregated = aggregate_price_points(points, "weekly")
+
+    assert len(aggregated) == 2
+    assert aggregated[0].date == "2026-01-06"
+    assert aggregated[0].open == 10.0
+    assert aggregated[0].high == 16.0
+    assert aggregated[0].low == 9.0
+    assert aggregated[0].close == 15.0
+    assert aggregated[0].price == 15.0
+
+
+def test_aggregate_price_points_monthly_uses_standard_ohlc() -> None:
+    points = [
+        PricePoint("2026-01-30", 12.0, open=10.0, high=13.0, low=9.0, close=12.0),
+        PricePoint("2026-01-31", 14.0, open=12.0, high=15.0, low=11.0, close=14.0),
+        PricePoint("2026-02-02", 16.0, open=15.0, high=17.0, low=14.0, close=16.0),
+    ]
+
+    aggregated = aggregate_price_points(points, "monthly")
+
+    assert len(aggregated) == 2
+    assert aggregated[0].date == "2026-01-31"
+    assert aggregated[0].open == 10.0
+    assert aggregated[0].high == 15.0
+    assert aggregated[0].low == 9.0
+    assert aggregated[0].close == 14.0
+
+
+def test_calculate_technical_indicators_with_pandas_ta() -> None:
+    points = [
+        PricePoint(f"2026-01-{day:02d}", float(day), open=float(day), high=float(day + 1), low=float(day - 1), close=float(day))
+        for day in range(1, 22)
+    ]
+
+    indicators = calculate_technical_indicators(
+        points,
+        {
+            "sma": TechnicalIndicatorSetting(enabled=True, period=20),
+            "ema": TechnicalIndicatorSetting(enabled=True, period=20),
+            "bbands": TechnicalIndicatorSetting(enabled=True, period=20),
+            "unknown": TechnicalIndicatorSetting(enabled=True, period=20),
+        },
+    )
+
+    assert indicators["2026-01-19"]["sma20"] is None or "sma20" not in indicators["2026-01-19"]
+    assert indicators["2026-01-20"]["sma20"] == 10.5
+    assert indicators["2026-01-21"]["sma20"] == 11.5
+    assert "ema20" in indicators["2026-01-21"]
+    assert "bbands20_upper" in indicators["2026-01-21"]
 
 
 def test_calculate_recovery_metrics_for_recovered_drawdown() -> None:
@@ -156,3 +253,70 @@ def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.M
     response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y"})
 
     assert response.status_code == 401
+
+
+def test_drawdowns_endpoint_accepts_candle_intervals() -> None:
+    client = TestClient(create_app(FakeProvider()))
+    response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y", "candle_interval": "weekly"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candle_interval"] == "weekly"
+    assert payload["results"][0]["data"][0]["open"] == 100.0
+    assert payload["results"][0]["data"][0]["high"] == 120.0
+    assert payload["results"][0]["data"][0]["low"] == 90.0
+    assert payload["results"][0]["data"][0]["close"] == 108.0
+
+
+def test_drawdowns_endpoint_accepts_technical_indicators() -> None:
+    client = TestClient(create_app(FakeProvider()))
+    response = client.post(
+        "/api/drawdowns",
+        json={
+            "symbols": ["7203"],
+            "period": "1y",
+            "technical_indicators": {
+                "sma": {"enabled": True, "period": 10},
+                "bad": {"enabled": True, "period": 20},
+                "ema": {"enabled": True, "period": 25},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["technical_indicators"] == {
+        "sma": {"enabled": True, "period": 10},
+        "ema": {"enabled": True, "period": 25},
+    }
+    assert isinstance(payload["results"][0]["data"][0]["indicators"], dict)
+
+
+def test_drawdowns_endpoint_reuses_cached_market_data_when_indicators_change() -> None:
+    provider = CountingProvider()
+    client = TestClient(create_app(provider))
+
+    first = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203"], "period": "1y", "technical_indicators": {"sma": {"enabled": True, "period": 20}}},
+    )
+    second = client.post(
+        "/api/drawdowns",
+        json={
+            "symbols": ["7203"],
+            "period": "1y",
+            "technical_indicators": {
+                "ema": {"enabled": True, "period": 20},
+                "bbands": {"enabled": True, "period": 20},
+            },
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert provider.price_calls == 1
+    assert provider.name_calls == 1
+    assert second.json()["technical_indicators"] == {
+        "ema": {"enabled": True, "period": 20},
+        "bbands": {"enabled": True, "period": 20},
+    }
