@@ -62,10 +62,10 @@ def test_jquants_api_key_resolution(monkeypatch):
     assert response.status_code == 200
     assert provider.last_api_key == "srv-key"
     
-    # 4. Request key overrides server key
+    # 4. Server key overrides request key
     response = client.post("/api/drawdowns", json={"symbols": ["7203"], "jquants_api_key": "req-key-2"})
     assert response.status_code == 200
-    assert provider.last_api_key == "req-key-2"
+    assert provider.last_api_key == "srv-key"
 
 def test_api_config_jquants(monkeypatch):
     monkeypatch.setenv("MARKET_DATA_PROVIDER", "jquants")
