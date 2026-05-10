@@ -8,11 +8,11 @@
 - UIでは指標のON/OFFと期間 `1〜100` を分離して指定できる。
 - yfinance取得結果と企業名を短時間キャッシュし、指標変更時の外部取得を抑制する。
 
-## Verification
+## Checks Reported
 
-- OHLC調整、週足/月足集約、テクニカル指標、キャッシュ再利用をテスト済み。
+- OHLC調整、週足/月足集約、テクニカル指標、キャッシュ再利用を確認済み。
 - フロントエンドは `node --check static/app.js` を基本構文チェックとする。
-- バックエンドは `uv run pytest` を基本検証とする。
+- バックエンドは `uv run pytest` を基本確認コマンドとする。
 
 ## Remaining Notes
 
