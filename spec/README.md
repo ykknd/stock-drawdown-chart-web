@@ -36,6 +36,7 @@
 - [Workspace Layout](./workspace-layout/requirements.md)
 - [J-Quants User API Provider](./jquants-user-api-provider/requirements.md)
 - [Manual Refresh Market Cache](./manual-refresh-market-cache/requirements.md)
+- [Security Name Selector](./security-name-selector/requirements.md)
 
 ## Workflow
 

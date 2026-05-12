@@ -1,6 +1,7 @@
 const { useEffect, useMemo, useState } = React;
 const h = React.createElement;
 const STORAGE_KEY = "drawdown-board-symbols";
+const SELECTED_SECURITIES_STORAGE_KEY = "drawdown-board-selected-security-codes";
 const PERIOD_STORAGE_KEY = "drawdown-board-period";
 const CUSTOM_MONTHS_STORAGE_KEY = "drawdown-board-custom-months";
 const CANDLE_INTERVAL_STORAGE_KEY = "drawdown-board-candle-interval";
@@ -8,7 +9,10 @@ const DD_RANGE_STORAGE_KEY = "drawdown-board-dd-range";
 const X_ZOOM_STORAGE_KEY = "drawdown-board-x-zoom";
 const TECHNICAL_INDICATORS_STORAGE_KEY = "drawdown-board-technical-indicators";
 const DEFAULT_SYMBOLS = "7203, 6758, 9984";
+const DEFAULT_SECURITY_CODES = ["7203", "6758", "9984"];
 const BENCHMARK_SYMBOL = "^N225";
+const JQUANTS_FREE_TIER_SELECTION_LIMIT = 5;
+const DEFAULT_SELECTION_LIMIT = 20;
 const PERIOD_OPTIONS = [
   ["1mo", "1ヶ月"],
   ["3mo", "3ヶ月"],
@@ -84,6 +88,35 @@ function parseSymbols(value) {
     .split(/[\s,、]+/)
     .map((symbol) => symbol.trim())
     .filter(Boolean);
+}
+
+function normalizeSecurityCode(code) {
+  return String(code || "").trim().toUpperCase().replace(/\.T$/, "");
+}
+
+function parseStoredSecurityCodes(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.map(normalizeSecurityCode).filter(Boolean);
+    }
+  } catch {
+    // Fall through to legacy comma-separated parsing.
+  }
+  const parsed = parseSymbols(value).map(normalizeSecurityCode).filter((code) => code !== BENCHMARK_SYMBOL);
+  return parsed.length ? parsed : null;
+}
+
+function uniqueCodes(codes) {
+  const seen = new Set();
+  return codes
+    .map(normalizeSecurityCode)
+    .filter((code) => {
+      if (!code || seen.has(code)) return false;
+      seen.add(code);
+      return true;
+    });
 }
 
 function symbolsWithBenchmark(symbols, marketDataProvider) {
@@ -769,7 +802,16 @@ function ResultCard({ result, ddRange, marketEvents, technicalIndicators, dateRa
 }
 
 function App() {
-  const [symbolsText, setSymbolsText] = useState(() => localStorage.getItem(STORAGE_KEY) || DEFAULT_SYMBOLS);
+  const [selectedSecurityCodes, setSelectedSecurityCodes] = useState(() =>
+    uniqueCodes(
+      parseStoredSecurityCodes(localStorage.getItem(SELECTED_SECURITIES_STORAGE_KEY)) ||
+        parseStoredSecurityCodes(localStorage.getItem(STORAGE_KEY)) ||
+        DEFAULT_SECURITY_CODES
+    )
+  );
+  const [securitySearch, setSecuritySearch] = useState("");
+  const [securityNotice, setSecurityNotice] = useState("");
+  const [securities, setSecurities] = useState([]);
   const [period, setPeriod] = useState(() => localStorage.getItem(PERIOD_STORAGE_KEY) || "1y");
   const [customMonths, setCustomMonths] = useState(() => clampCustomMonths(localStorage.getItem(CUSTOM_MONTHS_STORAGE_KEY) || 53));
   const [candleInterval, setCandleInterval] = useState(() => localStorage.getItem(CANDLE_INTERVAL_STORAGE_KEY) || "daily");
@@ -801,7 +843,25 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
-  const symbols = useMemo(() => parseSymbols(symbolsText), [symbolsText]);
+  const securitiesByCode = useMemo(
+    () => new Map(securities.map((security) => [normalizeSecurityCode(security.code), security])),
+    [securities]
+  );
+  const symbols = selectedSecurityCodes;
+  const isFreeTierLimited = appConfig.market_data_provider === "jquants" && jquantsFreeTier;
+  const selectionLimit = isFreeTierLimited ? JQUANTS_FREE_TIER_SELECTION_LIMIT : DEFAULT_SELECTION_LIMIT;
+  const overSelectionLimit = selectedSecurityCodes.length > selectionLimit;
+  const normalizedSecuritySearch = securitySearch.trim().toLowerCase();
+  const filteredSecurities = useMemo(() => {
+    if (!normalizedSecuritySearch) return [];
+    return securities
+      .filter((security) => {
+        const code = normalizeSecurityCode(security.code);
+        const name = String(security.name || "").toLowerCase();
+        return name.includes(normalizedSecuritySearch) || code.toLowerCase().includes(normalizedSecuritySearch);
+      })
+      .slice(0, 20);
+  }, [securities, normalizedSecuritySearch]);
   const visibleRange = useMemo(() => visibleDateRange(dateRange, xZoom), [dateRange, xZoom]);
   const zoomedResults = useMemo(() => results.map((result) => zoomResult(result, xZoom, dateRange)), [results, xZoom, dateRange]);
 
@@ -815,6 +875,10 @@ function App() {
   ) {
     if (!nextSymbols.length) return;
     if (appConfig.enabled && !authToken) return;
+    if (appConfig.market_data_provider === "jquants" && nextJQuantsFreeTier && nextSymbols.length > JQUANTS_FREE_TIER_SELECTION_LIMIT) {
+      setError("J-Quants無料枠では最大5銘柄まで選択できます");
+      return;
+    }
     if (appConfig.requires_jquants_api_key_input && !jquantsApiKey) {
       setError("J-Quants APIキーを入力してください");
       return;
@@ -847,7 +911,9 @@ function App() {
           ? { start: payload.requested_start_date, end: payload.requested_end_date }
           : null
       );
-      localStorage.setItem(STORAGE_KEY, nextSymbols.filter((symbol) => symbol.toUpperCase() !== BENCHMARK_SYMBOL).join(", "));
+      const storedCodes = uniqueCodes(nextSymbols.filter((symbol) => symbol.toUpperCase() !== BENCHMARK_SYMBOL));
+      localStorage.setItem(SELECTED_SECURITIES_STORAGE_KEY, JSON.stringify(storedCodes));
+      localStorage.setItem(STORAGE_KEY, storedCodes.join(", "));
       localStorage.setItem(PERIOD_STORAGE_KEY, nextPeriod);
       localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(nextCustomMonths));
       localStorage.setItem(CANDLE_INTERVAL_STORAGE_KEY, nextCandleInterval);
@@ -921,12 +987,60 @@ function App() {
   useEffect(() => {
     if (!appConfig.loaded) return;
     if (appConfig.enabled && !authToken) return;
-    // Initial fetch only for market events
     fetch("/api/market-events", { headers: makeAuthHeaders(appConfig, authToken) })
       .then((response) => (response.ok ? response.json() : []))
       .then((payload) => setMarketEvents(Array.isArray(payload) ? payload : []))
       .catch(() => setMarketEvents([]));
+    fetch("/api/securities", { headers: makeAuthHeaders(appConfig, authToken) })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((payload) => {
+        const nextSecurities = Array.isArray(payload) ? payload : [];
+        setSecurities(nextSecurities);
+        if (!nextSecurities.length) return;
+        const validCodes = new Set(nextSecurities.map((security) => normalizeSecurityCode(security.code)));
+        setSelectedSecurityCodes((currentCodes) => {
+          const validSelected = uniqueCodes(currentCodes).filter((code) => validCodes.has(code));
+          const missingCodes = uniqueCodes(currentCodes).filter((code) => !validCodes.has(code));
+          if (missingCodes.length) {
+            setSecurityNotice(`銘柄一覧にないコードを除外しました: ${missingCodes.join(", ")}`);
+          }
+          localStorage.setItem(SELECTED_SECURITIES_STORAGE_KEY, JSON.stringify(validSelected));
+          return validSelected;
+        });
+      })
+      .catch(() => {
+        setSecurities([]);
+        setSecurityNotice("銘柄一覧の読み込みに失敗しました");
+      });
   }, [appConfig.loaded, appConfig.enabled, authToken]);
+
+  function addSecurity(code) {
+    const normalizedCode = normalizeSecurityCode(code);
+    if (!normalizedCode || selectedSecurityCodes.includes(normalizedCode)) return;
+    if (selectedSecurityCodes.length >= selectionLimit) {
+      setSecurityNotice(
+        isFreeTierLimited
+          ? "J-Quants無料枠では最大5銘柄まで選択できます"
+          : `最大${DEFAULT_SELECTION_LIMIT}銘柄まで選択できます`
+      );
+      return;
+    }
+    const nextCodes = [...selectedSecurityCodes, normalizedCode];
+    setSelectedSecurityCodes(nextCodes);
+    localStorage.setItem(SELECTED_SECURITIES_STORAGE_KEY, JSON.stringify(nextCodes));
+    setSecuritySearch("");
+    setSecurityNotice("");
+    setDirty(true);
+  }
+
+  function removeSecurity(code) {
+    const normalizedCode = normalizeSecurityCode(code);
+    const nextCodes = selectedSecurityCodes.filter((selectedCode) => selectedCode !== normalizedCode);
+    setSelectedSecurityCodes(nextCodes);
+    localStorage.setItem(SELECTED_SECURITIES_STORAGE_KEY, JSON.stringify(nextCodes));
+    setSecurityNotice("");
+    setDirty(true);
+  }
 
   function onPeriodChange(event) {
     const nextPeriod = event.target.value;
@@ -998,6 +1112,12 @@ function App() {
   function onJQuantsFreeTierChange(event) {
     const nextFreeTier = event.target.checked;
     setJquantsFreeTier(nextFreeTier);
+    localStorage.setItem("drawdown-board-jquants-free-tier", String(nextFreeTier));
+    if (appConfig.market_data_provider === "jquants" && nextFreeTier && selectedSecurityCodes.length > JQUANTS_FREE_TIER_SELECTION_LIMIT) {
+      setSecurityNotice("J-Quants無料枠では最大5銘柄まで選択できます。選択数を減らしてください。");
+    } else {
+      setSecurityNotice("");
+    }
     setDirty(true);
   }
 
@@ -1038,12 +1158,58 @@ function App() {
         h(
           "form",
           { className: "symbol-form", onSubmit },
-          h("input", {
-            value: symbolsText,
-            onChange: (event) => { setSymbolsText(event.target.value); setDirty(true); },
-            placeholder: "7203, 6758, 9984",
-            "aria-label": "銘柄コード",
-          }),
+          h(
+            "div",
+            { className: "security-selector" },
+            h("input", {
+              value: securitySearch,
+              onChange: (event) => setSecuritySearch(event.target.value),
+              placeholder: "企業名・銘柄名で検索",
+              "aria-label": "銘柄名検索",
+              disabled: loading,
+            }),
+            normalizedSecuritySearch
+              ? h(
+                  "div",
+                  { className: "security-candidates" },
+                  filteredSecurities.length
+                    ? filteredSecurities.map((security) => {
+                        const code = normalizeSecurityCode(security.code);
+                        const selected = selectedSecurityCodes.includes(code);
+                        const disabled = selected || selectedSecurityCodes.length >= selectionLimit;
+                        return h(
+                          "button",
+                          {
+                            key: code,
+                            type: "button",
+                            className: "security-candidate",
+                            disabled,
+                            onClick: () => addSecurity(code),
+                          },
+                          h("span", null, security.name),
+                          h("small", null, code)
+                        );
+                      })
+                    : h("div", { className: "security-empty" }, "候補がありません")
+                )
+              : null,
+            h(
+              "div",
+              { className: "selected-securities" },
+              selectedSecurityCodes.length
+                ? selectedSecurityCodes.map((code) => {
+                    const security = securitiesByCode.get(code);
+                    const label = security ? `${security.name}（${code}）` : code;
+                    return h(
+                      "span",
+                      { key: code, className: "security-chip" },
+                      h("span", null, label),
+                      h("button", { type: "button", onClick: () => removeSecurity(code), "aria-label": `${label}を削除` }, "×")
+                    );
+                  })
+                : h("span", { className: "security-empty" }, "銘柄を選択してください")
+            )
+          ),
           h(
             "select",
             { value: period, onChange: onPeriodChange, "aria-label": "表示期間", disabled: loading },
@@ -1073,10 +1239,14 @@ function App() {
                 h("span", null, "か月")
               )
             : null,
-          h("button", { type: "submit", disabled: loading || symbols.length === 0 }, loading ? "取得中" : "更新")
+          h("button", { type: "submit", disabled: loading || symbols.length === 0 || overSelectionLimit }, loading ? "取得中" : "更新")
         )
       ),
       dirty ? h("div", { className: "notice dirty-notice" }, "設定変更は未反映です。更新を押してください") : null,
+      securityNotice ? h("div", { className: "notice" }, securityNotice) : null,
+      overSelectionLimit
+        ? h("div", { className: "notice" }, "J-Quants無料枠では最大5銘柄まで選択できます。選択数を減らしてください。")
+        : null,
       appConfig.market_data_provider === "jquants"
         ? h(
             "div",

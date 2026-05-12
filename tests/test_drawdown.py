@@ -217,6 +217,16 @@ def test_load_market_events_from_csv() -> None:
     assert events == sorted(events, key=lambda event: event.date)
 
 
+def test_securities_endpoint_returns_local_security_names() -> None:
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.get("/api/securities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {"code": "7203", "name": "トヨタ自動車"} in payload
+
+
 def test_drawdowns_endpoint_returns_success_and_symbol_errors() -> None:
     client = TestClient(create_app(FakeProvider()))
     response = client.post("/api/drawdowns", json={"symbols": ["7203", "9999", "7203.T"], "period": "1y"})
@@ -339,3 +349,42 @@ def test_drawdowns_endpoint_reuses_cached_market_data_when_indicators_change() -
         "ema": {"enabled": True, "period": 20},
         "bbands": {"enabled": True, "period": 20},
     }
+
+
+def test_jquants_free_tier_rejects_more_than_five_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "jquants")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "J-Quants無料枠では最大5銘柄まで選択できます"
+
+
+def test_jquants_paid_tier_allows_more_than_five_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "jquants")
+    monkeypatch.setenv("JQUANTS_API_KEY", "server-key")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": False},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 6
+
+
+def test_yfinance_mode_allows_more_than_five_symbols() -> None:
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": True},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 6
