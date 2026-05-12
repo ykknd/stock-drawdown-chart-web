@@ -2,38 +2,30 @@
 
 ## Implemented
 
-- `jquants-api-client` を依存関係に追加し、J-Quants からのデータ取得を可能にした。
-- `MARKET_DATA_PROVIDER` 環境変数による yfinance と J-Quants の切り替えを実装した。
-- `DrawdownRequest` に `jquants_api_key` と `jquants_free_tier` を追加した。
-- `/api/config` を拡張し、現在の provider と API キーの要求状態を返すようにした。
-- APIキーの解決優先順位 (環境変数 > リクエスト) と、キーの SHA-256 ハッシュによるキャッシュスコープ分離を実装した。
-- J-Quants 無料枠切り替え UI と取得期間制御を実装した。
-  - 無料枠 ON 時は `to_yyyymmdd = today - 12 weeks` とし、データが右端で欠損する場合は既存の薄グレー表示ロジックを活用する。
-  - 有料枠 OFF 時は `to_yyyymmdd = today` とする。
-  - 取得期間開始日が終了日以降になる場合は、「J-Quants無料枠ではこの期間に取得可能なデータがありません」というエラーを返す。
-- J-Quants モードでは日経平均 (`^N225`) を自動追加しないように frontend を修正した。
-- サーバーに API キーがない J-Quants モード時に、frontend で API キー入力欄を表示するようにした。
-- API キーがログやレスポンス、エラーメッセージに混入しないようセキュリティ対策を施した。
-- `tests/test_jquants.py` を追加・更新し、free tier 制御、キャッシュ分離、provider 選択、キー解決のテストを完了した。
+- J-Quants 429 レート制限対策として、価格取得時の 4桁銘柄コードへの fallback とリトライループを廃止した。
+- 価格取得は正規化された 5桁銘柄コード (例: 72030) のみで行うように変更した。
+- `jquantsapi` からの `requests.exceptions.HTTPError` および `tenacity.RetryError` を捕捉し、ステータスコードや例外メッセージに基づいて以下のエラーメッセージに変換するようにした。
+  - レート制限 (429, `too many 429 error responses`, `rate limit` 等): `J-Quants APIのレート制限に達しました。時間を置いて再試行してください。`
+  - 契約範囲外/無料枠制限 (400, `subscription`, `covers the following dates` 等): `J-Quantsの契約範囲外の期間です。期間または無料枠設定を確認してください。`
+  - プラン制限/無効キー (403): `J-Quants APIの契約プランで制限されているか、無効なAPIキーです。`
+- 銘柄名取得において、J-Quants API を叩く前に必ずローカルの `data/jp_security_names.csv` を参照するようにし、API 呼び出しを最小化した。
+- 銘柄名取得の API fallback (銘柄マスター/一覧) は価格取得とは独立させ、価格取得失敗時に不要な API コールが発生しないように制御した。
+- API キーがエラーメッセージに含まれないよう、引き続きチェックと変換を維持している。
+- `tests/test_jquants_optimization.py` を更新し、`RetryError` や特定の例外文字列が正しく日本語メッセージに変換されることを検証した。
+- (以前の実装) `jquants-api-client` を導入し、provider 切り替え、APIキー解決、無料枠制御などを実装済み。
 
 ## Changed Files
 
-- `pyproject.toml`
-- `uv.lock`
 - `stock_drawdown_app.py`
-- `static/app.js`
-- `static/styles.css`
-- `README.md`
-- `GEMINI.md`
-- `tests/test_drawdown.py`
-- `tests/test_jquants.py`
+- `tests/test_jquants_optimization.py`
+- (以前の変更) `pyproject.toml`, `uv.lock`, `static/app.js`, `README.md`, `GEMINI.md`, `tests/test_jquants.py`
 
 ## Checks Reported
 
-- `uv run pytest`: 32 tests passed.
+- `uv run pytest`: 40 tests passed (including refined error handling tests).
 - `uv run python -m py_compile stock_drawdown_app.py`: Success.
 - `node --check static/app.js`: Success.
 
 ## Unresolved Items
 
-- なし。J-Quants の `max` 期間は設計通り 2008-01-01 固定としている。
+- なし。

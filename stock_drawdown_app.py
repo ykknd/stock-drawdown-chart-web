@@ -292,6 +292,8 @@ class JQuantsMarketDataProvider:
         jquants_free_tier: bool = True,
     ) -> list[PricePoint]:
         import jquantsapi
+        import requests
+        from tenacity import RetryError
 
         end_date = self._get_end_date(jquants_free_tier)
         start_date = self._get_start_date(period, custom_months)
@@ -299,26 +301,39 @@ class JQuantsMarketDataProvider:
             raise ValueError("J-Quants無料枠ではこの期間に取得可能なデータがありません")
         
         cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+        code = self._to_jquants_code(symbol)
 
-        df = None
-        for code in self._jquants_code_candidates(symbol):
-            for attempt in range(2):
-                try:
-                    candidate_df = cli.get_eq_bars_daily(
-                        code=code,
-                        from_yyyymmdd=start_date.strftime("%Y%m%d"),
-                        to_yyyymmdd=end_date.strftime("%Y%m%d"),
-                    )
-                    if not candidate_df.empty:
-                        df = candidate_df
-                        break
-                except Exception:
-                    if attempt == 0:
-                        time.sleep(DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS)
-            if df is not None:
-                break
+        try:
+            df = cli.get_eq_bars_daily(
+                code=code,
+                from_yyyymmdd=start_date.strftime("%Y%m%d"),
+                to_yyyymmdd=end_date.strftime("%Y%m%d"),
+            )
+        except (requests.exceptions.HTTPError, RetryError, Exception) as e:
+            msg = str(e).lower()
+            is_429 = False
+            is_subscription = False
 
-        if df is None:
+            if isinstance(e, RetryError):
+                is_429 = True
+            elif isinstance(e, requests.exceptions.HTTPError) and e.response is not None:
+                if e.response.status_code == 429:
+                    is_429 = True
+                elif e.response.status_code == 400:
+                    is_subscription = True
+                elif e.response.status_code == 403:
+                    raise ValueError("J-Quants APIの契約プランで制限されているか、無効なAPIキーです。") from None
+
+            if "too many 429 error responses" in msg or "429" in msg or "rate limit" in msg:
+                is_429 = True
+            if "subscription" in msg or "covers the following dates" in msg:
+                is_subscription = True
+
+            if is_429:
+                raise ValueError("J-Quants APIのレート制限に達しました。時間を置いて再試行してください。") from None
+            if is_subscription:
+                raise ValueError("J-Quantsの契約範囲外の期間です。期間または無料枠設定を確認してください。") from None
+            
             raise ValueError("J-Quantsからのデータ取得に失敗しました") from None
 
         if df.empty:
