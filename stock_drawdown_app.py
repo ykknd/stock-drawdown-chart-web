@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -22,6 +22,8 @@ SUPPORTED_TECHNICAL_INDICATORS = {"sma", "ema", "bbands"}
 DEFAULT_PERIOD = "1y"
 DEFAULT_CANDLE_INTERVAL = "daily"
 DEFAULT_TECHNICAL_PERIOD = 20
+DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS = 1.0
+DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS = 12
 MIN_TECHNICAL_PERIOD = 1
 MAX_TECHNICAL_PERIOD = 100
 MIN_CUSTOM_MONTHS = 1
@@ -29,6 +31,7 @@ MAX_CUSTOM_MONTHS = 600
 DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS = 15 * 60
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
+JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
 auth_scheme = HTTPBearer(auto_error=False)
 
 
@@ -43,6 +46,8 @@ class DrawdownRequest(BaseModel):
     custom_months: int | None = Field(default=None, ge=MIN_CUSTOM_MONTHS, le=MAX_CUSTOM_MONTHS)
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
+    jquants_api_key: str | None = Field(default=None, min_length=1, max_length=256)
+    jquants_free_tier: bool = True
 
 
 class DrawdownPoint(BaseModel):
@@ -78,6 +83,8 @@ class SymbolDrawdownResult(BaseModel):
 class DrawdownResponse(BaseModel):
     period: str
     custom_months: int | None = None
+    requested_start_date: str
+    requested_end_date: str
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
     results: list[SymbolDrawdownResult]
@@ -89,9 +96,19 @@ class MarketEvent(BaseModel):
     note: str | None = None
 
 
-class AuthConfig(BaseModel):
+class SecurityInfo(BaseModel):
+    code: str
+    name: str
+
+
+class AppConfig(BaseModel):
     enabled: bool
     google_client_id: str | None = None
+    market_data_provider: str = "yfinance"
+    jquants_api_key_available: bool = False
+    requires_jquants_api_key_input: bool = False
+    market_data_cache_backend: str = "memory"
+    market_data_cache_daily_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -115,10 +132,38 @@ class PricePoint:
         object.__setattr__(self, "price", close_price)
 
 
-@dataclass(frozen=True)
-class CachedMarketPrices:
-    expires_at: float
+@dataclass
+class DailyMarketCacheData:
     points: list[PricePoint]
+    fetched_at: float
+    data_start_date: str
+    data_end_date: str
+    provider_type: str
+    symbol: str
+    jquants_free_tier: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "points": [vars(p) for p in self.points],
+            "fetched_at": self.fetched_at,
+            "data_start_date": self.data_start_date,
+            "data_end_date": self.data_end_date,
+            "provider_type": self.provider_type,
+            "symbol": self.symbol,
+            "jquants_free_tier": self.jquants_free_tier,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DailyMarketCacheData:
+        return cls(
+            points=[PricePoint(**p) for p in data["points"]],
+            fetched_at=data["fetched_at"],
+            data_start_date=data["data_start_date"],
+            data_end_date=data["data_end_date"],
+            provider_type=data["provider_type"],
+            symbol=data["symbol"],
+            jquants_free_tier=data["jquants_free_tier"],
+        )
 
 
 @dataclass(frozen=True)
@@ -139,16 +184,108 @@ class RecoveryMetrics:
     recovery_progress: float
 
 
+class MarketDataCache(Protocol):
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        """Get daily cache data."""
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        """Set daily cache data."""
+
+
+class MemoryMarketDataCache:
+    def __init__(self) -> None:
+        self._cache: dict[str, DailyMarketCacheData] = {}
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        return self._cache.get(key)
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        self._cache[key] = data
+
+
+class LocalFileMarketDataCache:
+    def __init__(self, cache_dir: Path) -> None:
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, key: str) -> Path:
+        return self.cache_dir / f"{key}.json"
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        path = self._path(key)
+        if not path.exists():
+            return None
+        import json
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return DailyMarketCacheData.from_dict(json.load(f))
+        except Exception:
+            return None
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        import json
+        path = self._path(key)
+        try:
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(data.to_dict(), f, ensure_ascii=False)
+        except Exception:
+            pass
+
+
+class GCSMarketDataCache:
+    def __init__(self, bucket_name: str, prefix: str) -> None:
+        from google.cloud import storage
+        self.client = storage.Client()
+        self.bucket = self.client.bucket(bucket_name)
+        self.prefix = prefix.strip("/")
+
+    def _name(self, key: str) -> str:
+        return f"{self.prefix}/{key}.json" if self.prefix else f"{key}.json"
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        blob = self.bucket.blob(self._name(key))
+        import json
+        try:
+            if not blob.exists():
+                return None
+            content = blob.download_as_text()
+            return DailyMarketCacheData.from_dict(json.loads(content))
+        except Exception:
+            return None
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        import json
+        blob = self.bucket.blob(self._name(key))
+        try:
+            blob.upload_from_string(json.dumps(data.to_dict(), ensure_ascii=False), content_type="application/json")
+        except Exception:
+            pass
+
+
 class MarketDataProvider(Protocol):
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
         """Return adjusted daily closes ordered by date."""
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         """Return a human-friendly security name when available."""
 
 
 class YFinanceMarketDataProvider:
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
         import yfinance as yf
 
         ticker = yf.Ticker(symbol)
@@ -186,7 +323,7 @@ class YFinanceMarketDataProvider:
             raise ValueError("有効なOHLCデータが見つかりませんでした")
         return points
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         import yfinance as yf
 
         ticker = yf.Ticker(symbol)
@@ -200,6 +337,246 @@ class YFinanceMarketDataProvider:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+
+class JQuantsMarketDataProvider:
+    def _to_jquants_base_code(self, symbol: str) -> str:
+        code = symbol.strip().upper()
+        if code.endswith(".T"):
+            code = code[:-2]
+        if code.isdigit() and len(code) == 4:
+            return code
+        if code.isdigit() and len(code) == 5 and code.endswith("0"):
+            return code[:4]
+        if code.isdigit() and len(code) == 5:
+            return code
+        raise ValueError(f"J-Quantsでは対応していない銘柄形式です: {symbol}")
+
+    def _to_jquants_code(self, symbol: str) -> str:
+        # 7203 or 7203.T -> 72030
+        code = self._to_jquants_base_code(symbol)
+        if len(code) == 4:
+            return f"{code}0"
+        if code.isdigit() and len(code) == 5:
+            return code
+        raise ValueError(f"J-Quantsでは対応していない銘柄形式です: {symbol}")
+
+    def _jquants_code_candidates(self, symbol: str) -> list[str]:
+        primary_code = self._to_jquants_code(symbol)
+        base_code = self._to_jquants_base_code(symbol)
+        return list(dict.fromkeys([primary_code, base_code]))
+
+    def _get_end_date(self, free_tier: bool) -> date:
+        if free_tier:
+            return date.today() - timedelta(weeks=jquants_free_data_lag_weeks())
+        return date.today()
+
+    def _get_start_date(self, period: str, custom_months: int | None) -> date:
+        if period == "custom":
+            return subtract_months(date.today(), custom_months or 12)
+        if period == "1mo":
+            return subtract_months(date.today(), 1)
+        if period == "3mo":
+            return subtract_months(date.today(), 3)
+        if period == "6mo":
+            return subtract_months(date.today(), 6)
+        if period == "1y":
+            return subtract_months(date.today(), 12)
+        if period == "2y":
+            return subtract_months(date.today(), 24)
+        if period == "5y":
+            return subtract_months(date.today(), 60)
+        # J-Quants 'max' is restricted to 2008-01-01 for now
+        return date(2008, 1, 1)
+
+    def _extract_security_name(self, row: object) -> str | None:
+        for key in ("CoName", "CoNameEn", "CompanyName", "CompanyNameEnglish", "Name"):
+            value = row.get(key)
+            if value is not None and value == value and str(value).strip():
+                return str(value).strip()
+        return None
+
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
+        import jquantsapi
+        import requests
+        from tenacity import RetryError
+
+        end_date = self._get_end_date(jquants_free_tier)
+        start_date = self._get_start_date(period, custom_months)
+        if start_date >= end_date:
+            raise ValueError("J-Quants無料枠ではこの期間に取得可能なデータがありません")
+        
+        cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+        code = self._to_jquants_code(symbol)
+
+        try:
+            df = cli.get_eq_bars_daily(
+                code=code,
+                from_yyyymmdd=start_date.strftime("%Y%m%d"),
+                to_yyyymmdd=end_date.strftime("%Y%m%d"),
+            )
+        except (requests.exceptions.HTTPError, RetryError, Exception) as e:
+            msg = str(e).lower()
+            is_429 = False
+            is_subscription = False
+
+            if isinstance(e, RetryError):
+                is_429 = True
+            elif isinstance(e, requests.exceptions.HTTPError) and e.response is not None:
+                if e.response.status_code == 429:
+                    is_429 = True
+                elif e.response.status_code == 400:
+                    is_subscription = True
+                elif e.response.status_code == 403:
+                    raise ValueError("J-Quants APIの契約プランで制限されているか、無効なAPIキーです。") from None
+
+            if "too many 429 error responses" in msg or "429" in msg or "rate limit" in msg:
+                is_429 = True
+            if "subscription" in msg or "covers the following dates" in msg:
+                is_subscription = True
+
+            if is_429:
+                raise ValueError("J-Quants APIのレート制限に達しました。時間を置いて再試行してください。") from None
+            if is_subscription:
+                raise ValueError("J-Quantsの契約範囲外の期間です。期間または無料枠設定を確認してください。") from None
+            
+            raise ValueError("J-Quantsからのデータ取得に失敗しました") from None
+
+        if df.empty:
+            raise ValueError("株価データが見つかりませんでした")
+
+        points: list[PricePoint] = []
+        for _, row in df.iterrows():
+            # AdjO, AdjH, AdjL, AdjC
+            open_p = row.get("AdjO")
+            high_p = row.get("AdjH")
+            low_p = row.get("AdjL")
+            close_p = row.get("AdjC")
+            dt = row.get("Date")
+            
+            if any(v is None or v != v for v in (open_p, high_p, low_p, close_p, dt)):
+                continue
+            if close_p <= 0 or open_p <= 0 or high_p <= 0 or low_p <= 0:
+                continue
+            
+            points.append(
+                PricePoint(
+                    date=normalize_date_value(dt),
+                    price=float(close_p),
+                    open=float(open_p),
+                    high=float(high_p),
+                    low=float(low_p),
+                    close=float(close_p),
+                )
+            )
+        
+        if not points:
+            raise ValueError("有効なOHLCデータが見つかりませんでした")
+        return sorted(points, key=lambda p: p.date)
+
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
+        import jquantsapi
+
+        try:
+            local_name = get_local_security_name(symbol)
+            if local_name:
+                return local_name
+
+            cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+            for candidate in self._jquants_code_candidates(symbol):
+                df = cli.get_eq_master(code=candidate)
+                if not df.empty:
+                    name = self._extract_security_name(df.iloc[0])
+                    if name:
+                        return name
+            for candidate in self._jquants_code_candidates(symbol):
+                df = cli.get_list(code=candidate)
+                if not df.empty:
+                    name = self._extract_security_name(df.iloc[0])
+                    if name:
+                        return name
+        except Exception:
+            pass
+        return None
+
+
+def hash_api_key(api_key: str) -> str:
+    import hashlib
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def normalize_date_value(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        return date(int(text[:4]), int(text[4:6]), int(text[6:8])).isoformat()
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    return date.fromisoformat(text).isoformat()
+
+
+def normalize_market_data_provider(provider_raw: str | None) -> str:
+    if not provider_raw:
+        return "yfinance"
+    provider = provider_raw.strip().lower()
+    if provider not in {"yfinance", "jquants"}:
+        raise ValueError(f"サポートされていない MARKET_DATA_PROVIDER です: {provider_raw}")
+    return provider
+
+
+def get_jquants_api_key_from_env() -> str | None:
+    return os.getenv("JQUANTS_API_KEY", "").strip() or None
+
+
+def load_local_securities() -> list[SecurityInfo]:
+    if not JP_SECURITY_NAMES_PATH.exists():
+        return []
+
+    securities: list[SecurityInfo] = []
+    try:
+        with JP_SECURITY_NAMES_PATH.open(newline="", encoding="utf-8-sig") as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                code = (row.get("code") or "").strip()
+                name = (row.get("name") or "").strip()
+                if code and name:
+                    securities.append(SecurityInfo(code=code, name=name))
+    except OSError:
+        return []
+    return securities
+
+
+def get_local_security_name(symbol: str) -> str | None:
+    if not JP_SECURITY_NAMES_PATH.exists():
+        return None
+
+    try:
+        code = JQuantsMarketDataProvider()._to_jquants_base_code(symbol)
+    except ValueError:
+        return None
+
+    with JP_SECURITY_NAMES_PATH.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            if (row.get("code") or "").strip() == code:
+                name = (row.get("name") or "").strip()
+                return name or None
+    return None
 
 
 def normalize_japanese_symbol(raw_symbol: str) -> str:
@@ -230,6 +607,28 @@ def normalize_custom_months(period: str, custom_months: int | None) -> int | Non
     if custom_months is None:
         return 12
     return max(MIN_CUSTOM_MONTHS, min(custom_months, MAX_CUSTOM_MONTHS))
+
+
+def requested_date_range(period: str, custom_months: int | None) -> tuple[str, str]:
+    end_date = date.today()
+    if period == "custom":
+        months = custom_months or 12
+        start_date = subtract_months(end_date, months)
+    elif period == "1mo":
+        start_date = subtract_months(end_date, 1)
+    elif period == "3mo":
+        start_date = subtract_months(end_date, 3)
+    elif period == "6mo":
+        start_date = subtract_months(end_date, 6)
+    elif period == "1y":
+        start_date = subtract_months(end_date, 12)
+    elif period == "2y":
+        start_date = subtract_months(end_date, 24)
+    elif period == "5y":
+        start_date = subtract_months(end_date, 60)
+    else:
+        start_date = date(2008, 1, 1)
+    return start_date.isoformat(), end_date.isoformat()
 
 
 def normalize_candle_interval(candle_interval: str) -> str:
@@ -544,6 +943,17 @@ def unique_symbols(symbols: list[str]) -> list[tuple[str, str]]:
     return unique
 
 
+def count_unique_valid_symbols(symbols: list[str]) -> int:
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        try:
+            normalized = normalize_japanese_symbol(raw_symbol)
+        except ValueError:
+            continue
+        seen.add(normalized)
+    return len(seen)
+
+
 def market_data_cache_ttl_seconds() -> int:
     raw_value = os.getenv("MARKET_DATA_CACHE_TTL_SECONDS")
     if raw_value is None:
@@ -554,34 +964,159 @@ def market_data_cache_ttl_seconds() -> int:
         return DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS
 
 
+def jquants_request_interval_seconds() -> float:
+    raw_value = os.getenv("JQUANTS_REQUEST_INTERVAL_SECONDS")
+    if raw_value is None:
+        return DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return DEFAULT_JQUANTS_REQUEST_INTERVAL_SECONDS
+
+
+def jquants_free_data_lag_weeks() -> int:
+    raw_value = os.getenv("JQUANTS_FREE_DATA_LAG_WEEKS")
+    if raw_value is None:
+        return DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS
+
+
+def get_jst_date() -> str:
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+
+
+def create_cache_backend(backend_type: str) -> MarketDataCache:
+    if backend_type == "local":
+        cache_dir_raw = os.getenv("MARKET_DATA_CACHE_DIR")
+        if cache_dir_raw:
+            cache_dir = Path(cache_dir_raw)
+        else:
+            local_app_data = os.getenv("LOCALAPPDATA")
+            if local_app_data:
+                cache_dir = Path(local_app_data) / "drawdown-chart" / "market-data-cache"
+            else:
+                cache_dir = Path.home() / ".drawdown-chart" / "market-data-cache"
+        return LocalFileMarketDataCache(cache_dir)
+    elif backend_type == "gcs":
+        bucket = os.getenv("MARKET_DATA_CACHE_GCS_BUCKET")
+        if not bucket:
+            raise ValueError("MARKET_DATA_CACHE_GCS_BUCKET が設定されていません")
+        prefix = os.getenv("MARKET_DATA_CACHE_GCS_PREFIX", "market-data-cache")
+        return GCSMarketDataCache(bucket, prefix)
+    return MemoryMarketDataCache()
+
+
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
-    market_data_provider = provider or YFinanceMarketDataProvider()
+    
+    provider_type = normalize_market_data_provider(os.getenv("MARKET_DATA_PROVIDER"))
+    if provider:
+        market_data_provider = provider
+    elif provider_type == "jquants":
+        market_data_provider = JQuantsMarketDataProvider()
+    else:
+        market_data_provider = YFinanceMarketDataProvider()
+
     cache_ttl_seconds = market_data_cache_ttl_seconds()
-    price_cache: dict[tuple[str, str, int | None], CachedMarketPrices] = {}
-    security_name_cache: dict[str, CachedSecurityName] = {}
+    cache_backend_type = os.getenv("MARKET_DATA_CACHE_BACKEND", "memory").lower()
+    daily_cache = create_cache_backend(cache_backend_type)
+    
+    jquants_interval_seconds = jquants_request_interval_seconds() if provider is None else 0.0
+    last_jquants_request_at = 0.0
+    # Temporary in-memory cache for security names
+    security_name_cache: dict[tuple[str, str, str], CachedSecurityName] = {}
 
-    def get_cached_prices(symbol: str, period: str, custom_months: int | None) -> list[PricePoint]:
-        cache_key = (symbol, period, custom_months)
+    def get_credential_scope(api_key: str | None) -> str:
+        if provider_type == "yfinance":
+            return "public"
+        server_key = get_jquants_api_key_from_env()
+        if server_key and (api_key is None or api_key == server_key):
+            return "server"
+        if api_key:
+            return hash_api_key(api_key)
+        return "none"
+
+    def wait_for_jquants_rate_limit() -> None:
+        nonlocal last_jquants_request_at
+        if provider_type != "jquants" or jquants_interval_seconds <= 0:
+            return
+
+        now = time.monotonic()
+        remaining = jquants_interval_seconds - (now - last_jquants_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
+            now = time.monotonic()
+        last_jquants_request_at = now
+
+    def get_cached_prices(
+        symbol: str, period: str, custom_months: int | None, api_key: str | None, jquants_free_tier: bool
+    ) -> list[PricePoint]:
+        scope = get_credential_scope(api_key)
+        jst_date = get_jst_date()
+        # Cache key does not contain API key directly
+        cache_key = f"{provider_type}_{scope}_{symbol}_{jquants_free_tier}_{jst_date}"
+        
+        req_start, req_end = requested_date_range(period, custom_months)
+        
+        cached = daily_cache.get(cache_key)
+        if cached:
+            if cached.data_start_date <= req_start and cached.data_end_date >= req_end:
+                return [p for p in cached.points if req_start <= p.date <= req_end]
+            
+            # If requested range is outside, we might need a wider fetch.
+            # For simplicity, if requested is wider, we just fetch what's requested and merge.
+            # But the provider uses 'period', so we'll just fetch the requested period.
+            # If the new period is actually smaller than cached but cached doesn't cover it (unlikely), 
+            # we'll still fetch.
+            
+        wait_for_jquants_rate_limit()
+        prices = market_data_provider.get_adjusted_close(
+            symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier
+        )
+        
+        # Update cache with potentially wider range
+        new_start = req_start
+        new_end = req_end
+        new_points = prices
+        
+        if cached:
+            # Merge with existing cache if same date
+            existing_points = {p.date: p for p in cached.points}
+            for p in prices:
+                existing_points[p.date] = p
+            sorted_dates = sorted(existing_points.keys())
+            new_points = [existing_points[d] for d in sorted_dates]
+            new_start = min(req_start, cached.data_start_date)
+            new_end = max(req_end, cached.data_end_date)
+            
+        daily_cache.set(cache_key, DailyMarketCacheData(
+            points=new_points,
+            fetched_at=time.time(),
+            data_start_date=new_start,
+            data_end_date=new_end,
+            provider_type=provider_type,
+            symbol=symbol,
+            jquants_free_tier=jquants_free_tier
+        ))
+        
+        return [p for p in new_points if req_start <= p.date <= req_end]
+
+    def get_cached_security_name(symbol: str, api_key: str | None) -> str | None:
+        scope = get_credential_scope(api_key)
+        cache_key = (provider_type, scope, symbol)
         now = time.time()
-        cached = price_cache.get(cache_key)
-        if cached and cached.expires_at > now:
-            return list(cached.points)
-
-        prices = market_data_provider.get_adjusted_close(symbol, period, custom_months)
-        if cache_ttl_seconds > 0:
-            price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
-        return prices
-
-    def get_cached_security_name(symbol: str) -> str | None:
-        now = time.time()
-        cached = security_name_cache.get(symbol)
+        cached = security_name_cache.get(cache_key)
         if cached and cached.expires_at > now:
             return cached.name
 
-        name = market_data_provider.get_security_name(symbol)
-        if cache_ttl_seconds > 0:
-            security_name_cache[symbol] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
+        wait_for_jquants_rate_limit()
+        name = market_data_provider.get_security_name(symbol, api_key=api_key)
+        if name is not None and cache_ttl_seconds > 0:
+            security_name_cache[cache_key] = CachedSecurityName(expires_at=now + cache_ttl_seconds, name=name)
         return name
 
     app.add_middleware(
@@ -595,21 +1130,41 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/config", response_model=AuthConfig)
-    def config() -> AuthConfig:
-        return AuthConfig(enabled=is_auth_enabled(), google_client_id=get_google_client_id())
+    @app.get("/api/config", response_model=AppConfig)
+    def config() -> AppConfig:
+        jquants_key_env = get_jquants_api_key_from_env()
+        return AppConfig(
+            enabled=is_auth_enabled(),
+            google_client_id=get_google_client_id(),
+            market_data_provider=provider_type,
+            jquants_api_key_available=jquants_key_env is not None,
+            requires_jquants_api_key_input=(provider_type == "jquants" and jquants_key_env is None),
+            market_data_cache_backend=cache_backend_type,
+            market_data_cache_daily_enabled=True,
+        )
 
     @app.get("/api/market-events", response_model=list[MarketEvent])
     def market_events(_: str | None = Depends(require_user)) -> list[MarketEvent]:
         return load_market_events()
 
+    @app.get("/api/securities", response_model=list[SecurityInfo])
+    def securities(_: str | None = Depends(require_user)) -> list[SecurityInfo]:
+        return load_local_securities()
+
     @app.post("/api/drawdowns", response_model=DrawdownResponse)
     def drawdowns(request: DrawdownRequest, _: str | None = Depends(require_user)) -> DrawdownResponse:
         period = normalize_period(request.period)
         custom_months = normalize_custom_months(period, request.custom_months)
+        requested_start_date, requested_end_date = requested_date_range(period, custom_months)
         candle_interval = normalize_candle_interval(request.candle_interval)
         technical_indicators = normalize_technical_indicators(request.technical_indicators)
         results: list[SymbolDrawdownResult] = []
+
+        effective_api_key = get_jquants_api_key_from_env() or request.jquants_api_key
+        if provider_type == "jquants" and request.jquants_free_tier and count_unique_valid_symbols(request.symbols) > 5:
+            raise HTTPException(status_code=400, detail="J-Quants無料枠では最大5銘柄まで選択できます")
+        if provider_type == "jquants" and not effective_api_key:
+            raise HTTPException(status_code=400, detail="J-Quants APIキーが必要です")
 
         seen_symbols: set[str] = set()
         for input_symbol in request.symbols:
@@ -619,9 +1174,17 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 if normalized_symbol in seen_symbols:
                     continue
                 seen_symbols.add(normalized_symbol)
-                prices = get_cached_prices(normalized_symbol, period, custom_months)
+                
+                prices = get_cached_prices(
+                    normalized_symbol,
+                    period,
+                    custom_months,
+                    api_key=effective_api_key,
+                    jquants_free_tier=request.jquants_free_tier,
+                )
                 prices = aggregate_price_points(prices, candle_interval)
-                name = get_cached_security_name(normalized_symbol)
+                name = get_cached_security_name(normalized_symbol, api_key=effective_api_key)
+                
                 data, max_drawdown, current_drawdown = calculate_drawdown(prices, technical_indicators)
                 recovery = calculate_recovery_metrics(prices)
                 results.append(
@@ -645,18 +1208,24 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 )
             except Exception as exc:
                 fallback_symbol = normalized_symbol or input_symbol.strip().upper() or input_symbol
+                # Ensure API key is not in error message
+                error_msg = str(exc)
+                if effective_api_key and effective_api_key in error_msg:
+                    error_msg = "データ取得エラーが発生しました"
                 results.append(
                     SymbolDrawdownResult(
                         input_symbol=input_symbol,
                         symbol=fallback_symbol,
                         display_symbol=to_display_symbol(fallback_symbol),
-                        error=str(exc),
+                        error=error_msg,
                     )
                 )
 
         return DrawdownResponse(
             period=period,
             custom_months=custom_months,
+            requested_start_date=requested_start_date,
+            requested_end_date=requested_end_date,
             candle_interval=candle_interval,
             technical_indicators=technical_indicators,
             results=results,
