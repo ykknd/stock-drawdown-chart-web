@@ -24,7 +24,14 @@ def disable_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeProvider:
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
         if symbol == "9999.T":
             raise ValueError("not found")
         return [
@@ -34,7 +41,7 @@ class FakeProvider:
             PricePoint("2026-01-04", 108.0),
         ]
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         return {"7203.T": "Toyota Motor Corporation"}.get(symbol)
 
 
@@ -43,13 +50,20 @@ class CountingProvider(FakeProvider):
         self.price_calls = 0
         self.name_calls = 0
 
-    def get_adjusted_close(self, symbol: str, period: str, custom_months: int | None = None) -> list[PricePoint]:
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
         self.price_calls += 1
-        return super().get_adjusted_close(symbol, period, custom_months)
+        return super().get_adjusted_close(symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier)
 
-    def get_security_name(self, symbol: str) -> str | None:
+    def get_security_name(self, symbol: str, api_key: str | None = None) -> str | None:
         self.name_calls += 1
-        return super().get_security_name(symbol)
+        return super().get_security_name(symbol, api_key=api_key)
 
 
 def test_normalize_japanese_symbol_adds_t_suffix() -> None:
@@ -203,6 +217,16 @@ def test_load_market_events_from_csv() -> None:
     assert events == sorted(events, key=lambda event: event.date)
 
 
+def test_securities_endpoint_returns_local_security_names() -> None:
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.get("/api/securities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {"code": "7203", "name": "トヨタ自動車"} in payload
+
+
 def test_drawdowns_endpoint_returns_success_and_symbol_errors() -> None:
     client = TestClient(create_app(FakeProvider()))
     response = client.post("/api/drawdowns", json={"symbols": ["7203", "9999", "7203.T"], "period": "1y"})
@@ -210,6 +234,7 @@ def test_drawdowns_endpoint_returns_success_and_symbol_errors() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["period"] == "1y"
+    assert payload["requested_start_date"] <= payload["requested_end_date"]
     assert len(payload["results"]) == 2
     assert payload["results"][0]["symbol"] == "7203.T"
     assert payload["results"][0]["name"] == "Toyota Motor Corporation"
@@ -231,6 +256,7 @@ def test_drawdowns_endpoint_accepts_custom_months() -> None:
     payload = response.json()
     assert payload["period"] == "custom"
     assert payload["custom_months"] == 53
+    assert payload["requested_start_date"] <= payload["requested_end_date"]
 
 
 def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,7 +267,10 @@ def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
     response = client.get("/api/config")
 
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "google_client_id": "example-client-id"}
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["google_client_id"] == "example-client-id"
+    assert "market_data_provider" in payload
 
 
 def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,3 +349,42 @@ def test_drawdowns_endpoint_reuses_cached_market_data_when_indicators_change() -
         "ema": {"enabled": True, "period": 20},
         "bbands": {"enabled": True, "period": 20},
     }
+
+
+def test_jquants_free_tier_rejects_more_than_five_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "jquants")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "J-Quants無料枠では最大5銘柄まで選択できます"
+
+
+def test_jquants_paid_tier_allows_more_than_five_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "jquants")
+    monkeypatch.setenv("JQUANTS_API_KEY", "server-key")
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": False},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 6
+
+
+def test_yfinance_mode_allows_more_than_five_symbols() -> None:
+    client = TestClient(create_app(FakeProvider()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203", "6758", "9432", "8306", "8316", "9984"], "jquants_free_tier": True},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 6

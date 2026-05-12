@@ -82,6 +82,12 @@ http://127.0.0.1:8000
 - 静的フロントエンドの変更は、既存の `static/app.js` と `static/styles.css` の構成に合わせます。
 - データ取得は `MarketDataProvider` 抽象を経由します。
 - yfinanceはMVP用途です。一般公開前にはデータ利用条件と提供元を再確認します。
+- J-Quants providerは `jquants-api-client` を使い、APIキーの秘匿性を維持します。
+- J-Quantsでは銘柄コード末尾の `.T` を除去し、`0` を付与した5桁形式 (例: `72030`) で通信します。
+- APIキーをログ、レスポンス、エラー文言に含めないでください。
+- market data cacheを実装・変更する場合、J-Quants APIキー生値をcache key、ファイル名、Cloud Storage object名、cache本文、ログ、レスポンスに含めないでください。
+- J-Quants cacheはcredential scope単位で分離してください。リクエストAPIキーは生値ではなくSHA-256 hashをscopeに使います。
+- Cloud Run公開環境の永続cacheにはCloud Storageを使い、コンテナのローカルファイルシステムを永続保存先として扱わないでください。
 - Cloud Run関連の設定は、既存のDockerfile、GitHub Actions、READMEの方針に合わせます。
 
 ## Implementation.md Template
@@ -125,6 +131,7 @@ Codexが検証できるように、実装完了時には以下を満たしてく
 
 - 既存の実装パターンを優先する。
 - 変更範囲は対象specに必要な範囲へ絞る。
+- 対象spec外のUI、API、データ構造を混ぜない。
 - unrelatedな変更や整形だけの差分を混ぜない。
 - ユーザーの未コミット変更を巻き戻さない。
 - テストがある場合は、関連テストを実行して結果を `implementation.md` に残す。

@@ -11,6 +11,8 @@ dependencies = [
     "yfinance>=0.2.66",
     "pandas>=2.3.0",
     "pandas-ta>=0.4.71b0",
+    "jquants-api-client>=2.0.1",
+    "google-cloud-storage>=3.10.1",
 ]
 
 [dependency-groups]
