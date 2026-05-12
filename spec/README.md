@@ -35,6 +35,7 @@
 - [Candlestick Technical Indicators](./candlestick-technical-indicators/requirements.md)
 - [Workspace Layout](./workspace-layout/requirements.md)
 - [J-Quants User API Provider](./jquants-user-api-provider/requirements.md)
+- [Security Name Selector](./security-name-selector/requirements.md)
 
 ## Workflow
 

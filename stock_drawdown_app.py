@@ -96,6 +96,11 @@ class MarketEvent(BaseModel):
     note: str | None = None
 
 
+class SecurityInfo(BaseModel):
+    code: str
+    name: str
+
+
 class AppConfig(BaseModel):
     enabled: bool
     google_client_id: str | None = None
@@ -428,6 +433,24 @@ def normalize_market_data_provider(provider_raw: str | None) -> str:
 
 def get_jquants_api_key_from_env() -> str | None:
     return os.getenv("JQUANTS_API_KEY", "").strip() or None
+
+
+def load_local_securities() -> list[SecurityInfo]:
+    if not JP_SECURITY_NAMES_PATH.exists():
+        return []
+
+    securities: list[SecurityInfo] = []
+    try:
+        with JP_SECURITY_NAMES_PATH.open(newline="", encoding="utf-8-sig") as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                code = (row.get("code") or "").strip()
+                name = (row.get("name") or "").strip()
+                if code and name:
+                    securities.append(SecurityInfo(code=code, name=name))
+    except OSError:
+        return []
+    return securities
 
 
 def get_local_security_name(symbol: str) -> str | None:
@@ -812,6 +835,17 @@ def unique_symbols(symbols: list[str]) -> list[tuple[str, str]]:
     return unique
 
 
+def count_unique_valid_symbols(symbols: list[str]) -> int:
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        try:
+            normalized = normalize_japanese_symbol(raw_symbol)
+        except ValueError:
+            continue
+        seen.add(normalized)
+    return len(seen)
+
+
 def market_data_cache_ttl_seconds() -> int:
     raw_value = os.getenv("MARKET_DATA_CACHE_TTL_SECONDS")
     if raw_value is None:
@@ -941,6 +975,10 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     def market_events(_: str | None = Depends(require_user)) -> list[MarketEvent]:
         return load_market_events()
 
+    @app.get("/api/securities", response_model=list[SecurityInfo])
+    def securities(_: str | None = Depends(require_user)) -> list[SecurityInfo]:
+        return load_local_securities()
+
     @app.post("/api/drawdowns", response_model=DrawdownResponse)
     def drawdowns(request: DrawdownRequest, _: str | None = Depends(require_user)) -> DrawdownResponse:
         period = normalize_period(request.period)
@@ -951,6 +989,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         results: list[SymbolDrawdownResult] = []
 
         effective_api_key = get_jquants_api_key_from_env() or request.jquants_api_key
+        if provider_type == "jquants" and request.jquants_free_tier and count_unique_valid_symbols(request.symbols) > 5:
+            raise HTTPException(status_code=400, detail="J-Quants無料枠では最大5銘柄まで選択できます")
         if provider_type == "jquants" and not effective_api_key:
             raise HTTPException(status_code=400, detail="J-Quants APIキーが必要です")
 
