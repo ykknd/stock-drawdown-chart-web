@@ -35,6 +35,7 @@
 - [Candlestick Technical Indicators](./candlestick-technical-indicators/requirements.md)
 - [Workspace Layout](./workspace-layout/requirements.md)
 - [J-Quants User API Provider](./jquants-user-api-provider/requirements.md)
+- [Manual Refresh Market Cache](./manual-refresh-market-cache/requirements.md)
 
 ## Workflow
 

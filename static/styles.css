@@ -209,6 +209,12 @@ h1 {
   color: #7b231d;
 }
 
+.dirty-notice {
+  background: #fff9db;
+  border-color: #fab005;
+  color: #856404;
+}
+
 .auth-panel {
   width: min(520px, 100%);
   margin: 18vh auto 0;

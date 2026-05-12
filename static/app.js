@@ -788,6 +788,8 @@ function App() {
     market_data_provider: "yfinance",
     jquants_api_key_available: false,
     requires_jquants_api_key_input: false,
+    market_data_cache_backend: "memory",
+    market_data_cache_daily_enabled: true,
   });
   const [jquantsApiKey, setJquantsApiKey] = useState("");
   const [jquantsFreeTier, setJquantsFreeTier] = useState(() => {
@@ -798,6 +800,7 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
   const symbols = useMemo(() => parseSymbols(symbolsText), [symbolsText]);
   const visibleRange = useMemo(() => visibleDateRange(dateRange, xZoom), [dateRange, xZoom]);
   const zoomedResults = useMemo(() => results.map((result) => zoomResult(result, xZoom, dateRange)), [results, xZoom, dateRange]);
@@ -807,7 +810,8 @@ function App() {
     nextPeriod = period,
     nextCandleInterval = candleInterval,
     nextTechnicalIndicators = technicalIndicators,
-    nextJQuantsFreeTier = jquantsFreeTier
+    nextJQuantsFreeTier = jquantsFreeTier,
+    nextCustomMonths = customMonths
   ) {
     if (!nextSymbols.length) return;
     if (appConfig.enabled && !authToken) return;
@@ -825,7 +829,7 @@ function App() {
         body: JSON.stringify({
           symbols: requestSymbols,
           period: nextPeriod,
-          custom_months: nextPeriod === "custom" ? customMonths : null,
+          custom_months: nextPeriod === "custom" ? nextCustomMonths : null,
           candle_interval: nextCandleInterval,
           technical_indicators: nextTechnicalIndicators,
           jquants_api_key: jquantsApiKey || null,
@@ -845,9 +849,10 @@ function App() {
       );
       localStorage.setItem(STORAGE_KEY, nextSymbols.filter((symbol) => symbol.toUpperCase() !== BENCHMARK_SYMBOL).join(", "));
       localStorage.setItem(PERIOD_STORAGE_KEY, nextPeriod);
-      localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(customMonths));
+      localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(nextCustomMonths));
       localStorage.setItem(CANDLE_INTERVAL_STORAGE_KEY, nextCandleInterval);
       storeTechnicalIndicators(nextTechnicalIndicators);
+      setDirty(false);
     } catch (err) {
       setError(err.message || "取得に失敗しました");
     } finally {
@@ -866,6 +871,8 @@ function App() {
           market_data_provider: payload.market_data_provider || "yfinance",
           jquants_api_key_available: Boolean(payload.jquants_api_key_available),
           requires_jquants_api_key_input: Boolean(payload.requires_jquants_api_key_input),
+          market_data_cache_backend: payload.market_data_cache_backend || "memory",
+          market_data_cache_daily_enabled: payload.market_data_cache_daily_enabled !== false,
         })
       )
       .catch(() =>
@@ -876,6 +883,8 @@ function App() {
           market_data_provider: "yfinance",
           jquants_api_key_available: false,
           requires_jquants_api_key_input: false,
+          market_data_cache_backend: "memory",
+          market_data_cache_daily_enabled: true,
         })
       );
   }, []);
@@ -912,9 +921,7 @@ function App() {
   useEffect(() => {
     if (!appConfig.loaded) return;
     if (appConfig.enabled && !authToken) return;
-    if (appConfig.requires_jquants_api_key_input && !jquantsApiKey) return;
-
-    fetchDrawdowns(parseSymbols(symbolsText), period);
+    // Initial fetch only for market events
     fetch("/api/market-events", { headers: makeAuthHeaders(appConfig, authToken) })
       .then((response) => (response.ok ? response.json() : []))
       .then((payload) => setMarketEvents(Array.isArray(payload) ? payload : []))
@@ -924,7 +931,7 @@ function App() {
   function onPeriodChange(event) {
     const nextPeriod = event.target.value;
     setPeriod(nextPeriod);
-    fetchDrawdowns(symbols, nextPeriod);
+    setDirty(true);
   }
 
   function onCustomYearsChange(event) {
@@ -932,7 +939,7 @@ function App() {
     const months = customMonths % 12;
     const nextMonths = clampCustomMonths(years * 12 + months);
     setCustomMonths(nextMonths);
-    localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(nextMonths));
+    setDirty(true);
   }
 
   function onCustomRemainderMonthsChange(event) {
@@ -940,7 +947,7 @@ function App() {
     const months = Math.min(Math.max(Number(event.target.value) || 0, 0), 11);
     const nextMonths = clampCustomMonths(years * 12 + months);
     setCustomMonths(nextMonths);
-    localStorage.setItem(CUSTOM_MONTHS_STORAGE_KEY, String(nextMonths));
+    setDirty(true);
   }
 
   function onDdRangeChange(event) {
@@ -958,14 +965,12 @@ function App() {
   function onCandleIntervalChange(event) {
     const nextInterval = event.target.value;
     setCandleInterval(nextInterval);
-    localStorage.setItem(CANDLE_INTERVAL_STORAGE_KEY, nextInterval);
-    fetchDrawdowns(symbols, period, nextInterval);
+    setDirty(true);
   }
 
   function updateTechnicalIndicators(nextIndicators) {
     setTechnicalIndicators(nextIndicators);
-    storeTechnicalIndicators(nextIndicators);
-    fetchDrawdowns(symbols, period, candleInterval, nextIndicators);
+    setDirty(true);
   }
 
   function onTechnicalIndicatorEnabledChange(event) {
@@ -993,13 +998,12 @@ function App() {
   function onJQuantsFreeTierChange(event) {
     const nextFreeTier = event.target.checked;
     setJquantsFreeTier(nextFreeTier);
-    localStorage.setItem("drawdown-board-jquants-free-tier", String(nextFreeTier));
-    fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, nextFreeTier);
+    setDirty(true);
   }
 
   function onSubmit(event) {
     event.preventDefault();
-    fetchDrawdowns(symbols, period);
+    fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, jquantsFreeTier, customMonths);
   }
 
   if (!appConfig.loaded) {
@@ -1036,7 +1040,7 @@ function App() {
           { className: "symbol-form", onSubmit },
           h("input", {
             value: symbolsText,
-            onChange: (event) => setSymbolsText(event.target.value),
+            onChange: (event) => { setSymbolsText(event.target.value); setDirty(true); },
             placeholder: "7203, 6758, 9984",
             "aria-label": "銘柄コード",
           }),
@@ -1072,6 +1076,7 @@ function App() {
           h("button", { type: "submit", disabled: loading || symbols.length === 0 }, loading ? "取得中" : "更新")
         )
       ),
+      dirty ? h("div", { className: "notice dirty-notice" }, "設定変更は未反映です。更新を押してください") : null,
       appConfig.market_data_provider === "jquants"
         ? h(
             "div",
