@@ -37,3 +37,39 @@
 ## Remaining Issues
 
 - なし。
+
+---
+
+## Additional Verification: J-Quants Error Classification
+
+## Status
+
+- 判定: pass
+- 検証日: 2026-05-11
+- 検証者: Codex
+
+## Requirements Checked
+
+- `RetryError`、`too many 429 error responses`、`429`、`rate limit` をJ-Quantsレート制限として分類すること。
+- HTTP 400、`subscription`、`covers the following dates` をJ-Quants契約範囲外または無料枠制限として分類すること。
+- APIキーやリクエスト詳細をフロントエンド向けエラーメッセージに含めないこと。
+- 指数バックオフretryを追加しないこと。
+- 価格取得の4桁fallbackを復活させず、正規化5桁コードのみで価格取得すること。
+
+## Commands
+
+- `uv run pytest` -> 40 passed
+- `uv run python -m py_compile stock_drawdown_app.py` -> pass
+- `node --check static/app.js` -> pass
+
+## Findings
+
+- 確認済み: `JQuantsMarketDataProvider.get_adjusted_close()` は `tenacity.RetryError` と文字列ベースの429系エラーを `J-Quants APIのレート制限に達しました。時間を置いて再試行してください。` に変換している。
+- 確認済み: HTTP 400、`subscription`、`covers the following dates` は `J-Quantsの契約範囲外の期間です。期間または無料枠設定を確認してください。` に変換している。
+- 確認済み: 403は従来通りプラン制限または無効APIキーとして分類している。
+- 確認済み: 価格取得は `_to_jquants_code(symbol)` の正規化5桁コードのみで `get_eq_bars_daily()` を呼び、4桁fallbackとリトライループは復活していない。
+- 確認済み: `tests/test_jquants_optimization.py` はRetryError、429文字列、400、契約範囲外文字列、5桁コードのみの価格取得、リトライなしを検証している。
+
+## Remaining Issues
+
+- なし。
