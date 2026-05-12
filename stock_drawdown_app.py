@@ -102,6 +102,8 @@ class AppConfig(BaseModel):
     market_data_provider: str = "yfinance"
     jquants_api_key_available: bool = False
     requires_jquants_api_key_input: bool = False
+    market_data_cache_backend: str = "memory"
+    market_data_cache_daily_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -125,10 +127,38 @@ class PricePoint:
         object.__setattr__(self, "price", close_price)
 
 
-@dataclass(frozen=True)
-class CachedMarketPrices:
-    expires_at: float
+@dataclass
+class DailyMarketCacheData:
     points: list[PricePoint]
+    fetched_at: float
+    data_start_date: str
+    data_end_date: str
+    provider_type: str
+    symbol: str
+    jquants_free_tier: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "points": [vars(p) for p in self.points],
+            "fetched_at": self.fetched_at,
+            "data_start_date": self.data_start_date,
+            "data_end_date": self.data_end_date,
+            "provider_type": self.provider_type,
+            "symbol": self.symbol,
+            "jquants_free_tier": self.jquants_free_tier,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DailyMarketCacheData:
+        return cls(
+            points=[PricePoint(**p) for p in data["points"]],
+            fetched_at=data["fetched_at"],
+            data_start_date=data["data_start_date"],
+            data_end_date=data["data_end_date"],
+            provider_type=data["provider_type"],
+            symbol=data["symbol"],
+            jquants_free_tier=data["jquants_free_tier"],
+        )
 
 
 @dataclass(frozen=True)
@@ -147,6 +177,84 @@ class RecoveryMetrics:
     underwater_days: int
     is_recovered: bool
     recovery_progress: float
+
+
+class MarketDataCache(Protocol):
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        """Get daily cache data."""
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        """Set daily cache data."""
+
+
+class MemoryMarketDataCache:
+    def __init__(self) -> None:
+        self._cache: dict[str, DailyMarketCacheData] = {}
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        return self._cache.get(key)
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        self._cache[key] = data
+
+
+class LocalFileMarketDataCache:
+    def __init__(self, cache_dir: Path) -> None:
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, key: str) -> Path:
+        return self.cache_dir / f"{key}.json"
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        path = self._path(key)
+        if not path.exists():
+            return None
+        import json
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return DailyMarketCacheData.from_dict(json.load(f))
+        except Exception:
+            return None
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        import json
+        path = self._path(key)
+        try:
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(data.to_dict(), f, ensure_ascii=False)
+        except Exception:
+            pass
+
+
+class GCSMarketDataCache:
+    def __init__(self, bucket_name: str, prefix: str) -> None:
+        from google.cloud import storage
+        self.client = storage.Client()
+        self.bucket = self.client.bucket(bucket_name)
+        self.prefix = prefix.strip("/")
+
+    def _name(self, key: str) -> str:
+        return f"{self.prefix}/{key}.json" if self.prefix else f"{key}.json"
+
+    def get(self, key: str) -> DailyMarketCacheData | None:
+        blob = self.bucket.blob(self._name(key))
+        import json
+        try:
+            if not blob.exists():
+                return None
+            content = blob.download_as_text()
+            return DailyMarketCacheData.from_dict(json.loads(content))
+        except Exception:
+            return None
+
+    def set(self, key: str, data: DailyMarketCacheData) -> None:
+        import json
+        blob = self.bucket.blob(self._name(key))
+        try:
+            blob.upload_from_string(json.dumps(data.to_dict(), ensure_ascii=False), content_type="application/json")
+        except Exception:
+            pass
 
 
 class MarketDataProvider(Protocol):
@@ -842,6 +950,32 @@ def jquants_free_data_lag_weeks() -> int:
         return DEFAULT_JQUANTS_FREE_DATA_LAG_WEEKS
 
 
+def get_jst_date() -> str:
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+
+
+def create_cache_backend(backend_type: str) -> MarketDataCache:
+    if backend_type == "local":
+        cache_dir_raw = os.getenv("MARKET_DATA_CACHE_DIR")
+        if cache_dir_raw:
+            cache_dir = Path(cache_dir_raw)
+        else:
+            local_app_data = os.getenv("LOCALAPPDATA")
+            if local_app_data:
+                cache_dir = Path(local_app_data) / "drawdown-chart" / "market-data-cache"
+            else:
+                cache_dir = Path.home() / ".drawdown-chart" / "market-data-cache"
+        return LocalFileMarketDataCache(cache_dir)
+    elif backend_type == "gcs":
+        bucket = os.getenv("MARKET_DATA_CACHE_GCS_BUCKET")
+        if not bucket:
+            raise ValueError("MARKET_DATA_CACHE_GCS_BUCKET が設定されていません")
+        prefix = os.getenv("MARKET_DATA_CACHE_GCS_PREFIX", "market-data-cache")
+        return GCSMarketDataCache(bucket, prefix)
+    return MemoryMarketDataCache()
+
+
 def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     
@@ -854,11 +988,12 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         market_data_provider = YFinanceMarketDataProvider()
 
     cache_ttl_seconds = market_data_cache_ttl_seconds()
+    cache_backend_type = os.getenv("MARKET_DATA_CACHE_BACKEND", "memory").lower()
+    daily_cache = create_cache_backend(cache_backend_type)
+    
     jquants_interval_seconds = jquants_request_interval_seconds() if provider is None else 0.0
     last_jquants_request_at = 0.0
-    # Cache key: (provider_type, scope, symbol, period, custom_months, jquants_free_tier)
-    price_cache: dict[tuple[str, str, str, str, int | None, bool], CachedMarketPrices] = {}
-    # Cache key: (provider_type, scope, symbol)
+    # Temporary in-memory cache for security names
     security_name_cache: dict[tuple[str, str, str], CachedSecurityName] = {}
 
     def get_credential_scope(api_key: str | None) -> str:
@@ -887,19 +1022,54 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         symbol: str, period: str, custom_months: int | None, api_key: str | None, jquants_free_tier: bool
     ) -> list[PricePoint]:
         scope = get_credential_scope(api_key)
-        cache_key = (provider_type, scope, symbol, period, custom_months, jquants_free_tier)
-        now = time.time()
-        cached = price_cache.get(cache_key)
-        if cached and cached.expires_at > now:
-            return list(cached.points)
-
+        jst_date = get_jst_date()
+        # Cache key does not contain API key directly
+        cache_key = f"{provider_type}_{scope}_{symbol}_{jquants_free_tier}_{jst_date}"
+        
+        req_start, req_end = requested_date_range(period, custom_months)
+        
+        cached = daily_cache.get(cache_key)
+        if cached:
+            if cached.data_start_date <= req_start and cached.data_end_date >= req_end:
+                return [p for p in cached.points if req_start <= p.date <= req_end]
+            
+            # If requested range is outside, we might need a wider fetch.
+            # For simplicity, if requested is wider, we just fetch what's requested and merge.
+            # But the provider uses 'period', so we'll just fetch the requested period.
+            # If the new period is actually smaller than cached but cached doesn't cover it (unlikely), 
+            # we'll still fetch.
+            
         wait_for_jquants_rate_limit()
         prices = market_data_provider.get_adjusted_close(
             symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier
         )
-        if cache_ttl_seconds > 0:
-            price_cache[cache_key] = CachedMarketPrices(expires_at=now + cache_ttl_seconds, points=list(prices))
-        return prices
+        
+        # Update cache with potentially wider range
+        new_start = req_start
+        new_end = req_end
+        new_points = prices
+        
+        if cached:
+            # Merge with existing cache if same date
+            existing_points = {p.date: p for p in cached.points}
+            for p in prices:
+                existing_points[p.date] = p
+            sorted_dates = sorted(existing_points.keys())
+            new_points = [existing_points[d] for d in sorted_dates]
+            new_start = min(req_start, cached.data_start_date)
+            new_end = max(req_end, cached.data_end_date)
+            
+        daily_cache.set(cache_key, DailyMarketCacheData(
+            points=new_points,
+            fetched_at=time.time(),
+            data_start_date=new_start,
+            data_end_date=new_end,
+            provider_type=provider_type,
+            symbol=symbol,
+            jquants_free_tier=jquants_free_tier
+        ))
+        
+        return [p for p in new_points if req_start <= p.date <= req_end]
 
     def get_cached_security_name(symbol: str, api_key: str | None) -> str | None:
         scope = get_credential_scope(api_key)
@@ -935,6 +1105,8 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             market_data_provider=provider_type,
             jquants_api_key_available=jquants_key_env is not None,
             requires_jquants_api_key_input=(provider_type == "jquants" and jquants_key_env is None),
+            market_data_cache_backend=cache_backend_type,
+            market_data_cache_daily_enabled=True,
         )
 
     @app.get("/api/market-events", response_model=list[MarketEvent])
