@@ -45,9 +45,16 @@ To test production-like auth locally, set:
 ```powershell
 $env:APP_AUTH_ENABLED="true"
 $env:GOOGLE_CLIENT_ID="<google-oauth-client-id>"
-$env:ALLOWED_EMAIL="<your-google-account-email>"
 uv run uvicorn stock_drawdown_app:app --reload
 ```
+
+With `APP_AUTH_ENABLED=true`, Google login is required. If `ALLOWED_EMAIL` is set, only that email address can use the app. If `ALLOWED_EMAIL` is not set, any user with a valid Google login can use the app.
+
+```powershell
+$env:ALLOWED_EMAIL="<your-google-account-email>" # optional, for private access
+```
+
+Google login is used only for identity verification. The app does not collect or store Google passwords, Google API access tokens, refresh tokens, or permissions for Gmail/Drive. The backend verifies the Google ID token and uses the verified email address only for access control.
 
 ## Market Data Provider
 
@@ -195,7 +202,10 @@ Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> 
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `terraform output -raw workload_identity_provider`
 - `GCP_SERVICE_ACCOUNT`: `terraform output -raw deploy_service_account_email`
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID
-- `ALLOWED_EMAIL`: the only Google account allowed to use the app
+
+Optional repository secret:
+
+- `ALLOWED_EMAIL`: set only for private single-email access. Leave unset for public hosting where any verified Google account may use the app.
 
 ### Required GitHub variables
 
