@@ -176,8 +176,11 @@ Terraformは主に以下を作成します。
 - Workload Identity Pool / Provider
 - GitHub Actions OIDC用IAM binding
 - Cloud Run runtime service accountのcache bucket read/write権限
+- Cloud Build default service accountのsource archive read、build log、Artifact Registry push権限
 
 Cloud Run service本体は、release tag push時にGitHub Actionsが作成または更新します。
+
+`gcloud builds submit` で `PROJECT_NUMBER-compute@developer.gserviceaccount.com does not have storage.objects.get access` が出る場合は、Cloud Build default service accountの権限不足です。最新の `infra/gcp` を反映して `terraform apply` を再実行してください。
 
 ### Required GitHub secrets
 
