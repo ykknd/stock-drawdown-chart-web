@@ -185,7 +185,7 @@ Cloud Run service本体は、release tag push時にGitHub Actionsが作成また
 
 `caller does not have permission to act as service account` が出る場合は、GitHub Actions deploy service accountがCloud Build default service accountをactAsする権限不足です。最新の `infra/gcp` を反映して `terraform apply` を再実行してください。
 
-Cloud Build作成後にログストリーミング権限で失敗する場合があるため、GitHub Actionsでは `gcloud builds submit --suppress-logs` を使います。詳細ログはGitHub Actions出力に表示されるCloud Build URLから確認してください。
+Cloud Build作成後にログストリーミング権限で失敗する場合があるため、GitHub Actionsでは `gcloud builds submit --async` でbuildを作成し、`gcloud builds describe` でステータスをポーリングします。詳細ログはGitHub Actions出力に表示されるCloud Build URLから確認してください。
 
 ### Required GitHub secrets
 

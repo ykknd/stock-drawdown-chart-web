@@ -64,9 +64,10 @@ If it fails with `caller does not have permission to act as service account`,
 run `terraform apply` again from the latest IaC. The deploy service account needs
 `roles/iam.serviceAccountUser` on the Cloud Build default service account.
 
-The GitHub Actions workflow uses `gcloud builds submit --suppress-logs` because
-Cloud Build log streaming can require broader project viewer permissions. Open
-the Cloud Build URL printed by the workflow when detailed build logs are needed.
+The GitHub Actions workflow uses `gcloud builds submit --async` and polls the
+build status with `gcloud builds describe` because Cloud Build log streaming can
+require broader project viewer permissions. Open the Cloud Build URL printed by
+the workflow when detailed build logs are needed.
 
 ## GitHub Settings After Apply
 

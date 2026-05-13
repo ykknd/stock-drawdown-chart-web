@@ -68,7 +68,35 @@ jobs:
         run: |
           IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$ARTIFACT_REPOSITORY/$SERVICE:${GITHUB_REF_NAME}"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-          gcloud builds submit --project "${{ secrets.GCP_PROJECT_ID }}" --tag "$IMAGE" --suppress-logs .
+          BUILD_ID="$(gcloud builds submit \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --tag "$IMAGE" \
+            --async \
+            --format='value(id)' \
+            .)"
+          echo "Cloud Build ID: $BUILD_ID"
+          echo "Cloud Build logs: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=${{ secrets.GCP_PROJECT_ID }}"
+
+          for attempt in $(seq 1 120); do
+            STATUS="$(gcloud builds describe "$BUILD_ID" \
+              --project "${{ secrets.GCP_PROJECT_ID }}" \
+              --format='value(status)')"
+            echo "Cloud Build status: $STATUS"
+
+            case "$STATUS" in
+              SUCCESS)
+                exit 0
+                ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+                exit 1
+                ;;
+            esac
+
+            sleep 5
+          done
+
+          echo "Cloud Build did not finish within the expected time."
+          exit 1
 
       - name: Deploy to Cloud Run
         run: |
