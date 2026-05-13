@@ -123,6 +123,17 @@ Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> 
 - `GOOGLE_CLIENT_ID`
 - `ALLOWED_EMAIL`
 
+### Required GitHub variables
+
+Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> Variables`.
+
+- `MARKET_DATA_PROVIDER`: `jquants`
+- `MARKET_DATA_CACHE_BACKEND`: `gcs`
+- `MARKET_DATA_CACHE_GCS_BUCKET`: Cloud Storage bucket name for market data cache
+- `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+
+For public hosting, do not set `JQUANTS_API_KEY` on Cloud Run. Users should provide their own J-Quants API key in the web UI.
+
 ### Release flow
 
 Development happens on `feat/host-gc`. Production deploys only from tags on `main`.
