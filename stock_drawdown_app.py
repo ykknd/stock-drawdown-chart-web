@@ -692,7 +692,7 @@ def get_allowed_email() -> str | None:
 def verify_google_token(token: str) -> str:
     client_id = get_google_client_id()
     allowed_email = get_allowed_email()
-    if not client_id or not allowed_email:
+    if not client_id:
         raise HTTPException(status_code=500, detail="認証設定が不足しています")
 
     try:
@@ -704,7 +704,9 @@ def verify_google_token(token: str) -> str:
         raise HTTPException(status_code=401, detail="Googleログインの検証に失敗しました") from exc
 
     email = str(claims.get("email", "")).strip().lower()
-    if email != allowed_email:
+    if not email:
+        raise HTTPException(status_code=401, detail="Googleログインの検証に失敗しました")
+    if allowed_email and email != allowed_email:
         raise HTTPException(status_code=403, detail="このアカウントにはアクセス権がありません")
     return email
 

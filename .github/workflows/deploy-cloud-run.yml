@@ -100,6 +100,11 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          ENV_VARS="APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }}"
+          if [ -n "${{ secrets.ALLOWED_EMAIL }}" ]; then
+            ENV_VARS="$ENV_VARS,ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}"
+          fi
+
           gcloud run deploy "$SERVICE" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --region "$REGION" \
@@ -110,4 +115,4 @@ jobs:
             --memory 512Mi \
             --cpu 1 \
             --service-account "stock-drawdown-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
-            --set-env-vars APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }}
+            --set-env-vars "$ENV_VARS"
