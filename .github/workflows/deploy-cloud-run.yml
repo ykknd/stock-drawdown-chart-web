@@ -81,4 +81,5 @@ jobs:
             --max-instances 1 \
             --memory 512Mi \
             --cpu 1 \
-            --set-env-vars APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}
+            --service-account "stock-drawdown-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --set-env-vars APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }}
