@@ -5,3 +5,9 @@ __pycache__/
 uvicorn.log
 uvicorn.err.log
 .env
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+out.txt

@@ -21,6 +21,18 @@ locals {
     "roles/serviceusage.serviceUsageViewer",
     "roles/storage.admin",
   ])
+
+  cloud_build_default_service_account = "${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+
+  cloud_build_project_roles = toset([
+    "roles/artifactregistry.writer",
+    "roles/logging.logWriter",
+    "roles/storage.objectViewer",
+  ])
+}
+
+data "google_project" "current" {
+  project_id = var.project_id
 }
 
 resource "google_project_service" "required" {
@@ -91,6 +103,14 @@ resource "google_project_iam_member" "deploy_project_roles" {
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.deploy.email}"
+}
+
+resource "google_project_iam_member" "cloud_build_project_roles" {
+  for_each = local.cloud_build_project_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${local.cloud_build_default_service_account}"
 }
 
 resource "google_service_account_iam_member" "deploy_can_use_runtime" {

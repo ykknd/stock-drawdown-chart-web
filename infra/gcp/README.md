@@ -12,6 +12,7 @@ This directory provisions the Google Cloud resources required for tag-based Clou
 - Cloud Run runtime service account
 - Workload Identity Pool and Provider for GitHub Actions OIDC
 - IAM bindings for deployment and runtime cache access
+- IAM bindings for the Cloud Build default service account to read submitted source archives, write build logs, and push images
 
 ## Prerequisites
 
@@ -51,6 +52,12 @@ terraform plan
 terraform apply
 terraform output
 ```
+
+If GitHub Actions fails during `gcloud builds submit` with a message like
+`PROJECT_NUMBER-compute@developer.gserviceaccount.com does not have storage.objects.get access`,
+pull the latest IaC changes and run `terraform apply` again. The Terraform
+configuration grants the Cloud Build default service account the required
+Storage, logging, and Artifact Registry permissions.
 
 ## GitHub Settings After Apply
 
