@@ -13,6 +13,7 @@ This directory provisions the Google Cloud resources required for tag-based Clou
 - Workload Identity Pool and Provider for GitHub Actions OIDC
 - IAM bindings for deployment and runtime cache access
 - IAM bindings for the Cloud Build default service account to read submitted source archives, write build logs, and push images
+- IAM binding that lets the GitHub Actions deploy service account act as the Cloud Build default service account
 
 ## Prerequisites
 
@@ -58,6 +59,14 @@ If GitHub Actions fails during `gcloud builds submit` with a message like
 pull the latest IaC changes and run `terraform apply` again. The Terraform
 configuration grants the Cloud Build default service account the required
 Storage, logging, and Artifact Registry permissions.
+
+If it fails with `caller does not have permission to act as service account`,
+run `terraform apply` again from the latest IaC. The deploy service account needs
+`roles/iam.serviceAccountUser` on the Cloud Build default service account.
+
+The GitHub Actions workflow uses `gcloud builds submit --suppress-logs` because
+Cloud Build log streaming can require broader project viewer permissions. Open
+the Cloud Build URL printed by the workflow when detailed build logs are needed.
 
 ## GitHub Settings After Apply
 

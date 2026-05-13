@@ -14,6 +14,7 @@
 - [x] Terraformでcache用Cloud Storage bucketに1日削除のlifecycle ruleを設定できるようにする。
 - [x] TerraformでCloud Run runtime service accountへcache bucketのobject read/write権限を付与できるようにする。
 - [x] TerraformでCloud Build default service accountへsource archive read、build log、Artifact Registry push権限を付与できるようにする。
+- [x] TerraformでGitHub Actions deploy service accountがCloud Build default service accountをactAsできるようにする。
 - [x] GitHub Actions deploy時にCloud Run runtime service accountを指定する。
 - [x] READMEへTerraformによる事前準備・構築・GitHub設定手順を追記する。
 - [ ] GitHub Repository Variablesを設定する。
