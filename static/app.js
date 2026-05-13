@@ -1249,35 +1249,46 @@ function App() {
         : null,
       appConfig.market_data_provider === "jquants"
         ? h(
-            "div",
-            { className: "jquants-tier-panel" },
+            "details",
+            { className: "jquants-settings-panel", open: true },
+            h("summary", null, "J-Quants設定"),
             h(
-              "label",
-              { className: "jquants-tier-control" },
-              h("input", {
-                type: "checkbox",
-                checked: jquantsFreeTier,
-                onChange: onJQuantsFreeTierChange,
-              }),
-              h("span", null, "J-Quants無料枠"),
-              h("small", null, "無料枠では直近12週を除いた範囲を取得します。有料枠の場合はチェックを外してください。")
-            )
-          )
-        : null,
-      appConfig.requires_jquants_api_key_input
-        ? h(
-            "div",
-            { className: "jquants-key-panel" },
-            h("div", { className: "jquants-key-input" },
-              h("span", null, "J-Quants APIキー:"),
-              h("input", {
-                type: "password",
-                value: jquantsApiKey,
-                onChange: (event) => setJquantsApiKey(event.target.value),
-                placeholder: "J-Quants APIキーを入力",
-                "aria-label": "J-Quants APIキー",
-              }),
-              h("small", null, "環境変数 JQUANTS_API_KEY を設定すると入力を省けます。")
+              "div",
+              { className: "jquants-settings-body" },
+              h(
+                "div",
+                { className: "jquants-tier-panel" },
+                h(
+                  "label",
+                  { className: "jquants-tier-control" },
+                  h("input", {
+                    type: "checkbox",
+                    checked: jquantsFreeTier,
+                    onChange: onJQuantsFreeTierChange,
+                  }),
+                  h("span", null, "J-Quants無料枠"),
+                  h("small", null, "無料枠では直近12週を除いた範囲を取得します。有料枠の場合はチェックを外してください。")
+                )
+              ),
+              appConfig.requires_jquants_api_key_input
+                ? h(
+                    "div",
+                    { className: "jquants-key-panel" },
+                    h(
+                      "div",
+                      { className: "jquants-key-input" },
+                      h("span", null, "J-Quants APIキー:"),
+                      h("input", {
+                        type: "password",
+                        value: jquantsApiKey,
+                        onChange: (event) => setJquantsApiKey(event.target.value),
+                        placeholder: "J-Quants APIキーを入力",
+                        "aria-label": "J-Quants APIキー",
+                      }),
+                      h("small", null, "環境変数 JQUANTS_API_KEY を設定すると入力を省けます。")
+                    )
+                  )
+                : null
             )
           )
         : null,
@@ -1377,6 +1388,11 @@ function App() {
         { className: "results-grid" },
         h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents, dateRange: visibleRange }),
         zoomedResults.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange }))
+      ),
+      h(
+        "footer",
+        { className: "privacy-footer" },
+        "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
       )
     )
   );
