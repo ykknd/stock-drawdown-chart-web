@@ -37,6 +37,7 @@
 - [J-Quants User API Provider](./jquants-user-api-provider/requirements.md)
 - [Manual Refresh Market Cache](./manual-refresh-market-cache/requirements.md)
 - [Security Name Selector](./security-name-selector/requirements.md)
+- [Google Login Public Access](./google-login-public-access/requirements.md)
 
 ## Workflow
 

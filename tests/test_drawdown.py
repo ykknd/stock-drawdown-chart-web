@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 import pytest
 
 from stock_drawdown_app import (
@@ -13,6 +14,7 @@ from stock_drawdown_app import (
     load_market_events,
     normalize_japanese_symbol,
     subtract_months,
+    verify_google_token,
 )
 
 
@@ -282,6 +284,56 @@ def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.M
     response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y"})
 
     assert response.status_code == 401
+
+
+def test_verify_google_token_allows_any_verified_email_without_allowed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.oauth2 import id_token
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "example-client-id")
+    monkeypatch.delenv("ALLOWED_EMAIL", raising=False)
+
+    def fake_verify(token: str, request: object, audience: str) -> dict[str, str]:
+        assert token == "valid-token"
+        assert audience == "example-client-id"
+        return {"email": "User@Example.com"}
+
+    monkeypatch.setattr(id_token, "verify_oauth2_token", fake_verify)
+
+    assert verify_google_token("valid-token") == "user@example.com"
+
+
+def test_verify_google_token_rejects_mismatched_allowed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.oauth2 import id_token
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "example-client-id")
+    monkeypatch.setenv("ALLOWED_EMAIL", "allowed@example.com")
+
+    def fake_verify(token: str, request: object, audience: str) -> dict[str, str]:
+        return {"email": "other@example.com"}
+
+    monkeypatch.setattr(id_token, "verify_oauth2_token", fake_verify)
+
+    with pytest.raises(HTTPException) as exc_info:
+        verify_google_token("valid-token")
+
+    assert exc_info.value.status_code == 403
+
+
+def test_verify_google_token_rejects_missing_email_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.oauth2 import id_token
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "example-client-id")
+    monkeypatch.delenv("ALLOWED_EMAIL", raising=False)
+
+    def fake_verify(token: str, request: object, audience: str) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(id_token, "verify_oauth2_token", fake_verify)
+
+    with pytest.raises(HTTPException) as exc_info:
+        verify_google_token("valid-token")
+
+    assert exc_info.value.status_code == 401
 
 
 def test_drawdowns_endpoint_accepts_candle_intervals() -> None:
