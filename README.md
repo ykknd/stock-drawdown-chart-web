@@ -99,29 +99,106 @@ $env:MARKET_DATA_CACHE_GCS_BUCKET="<bucket-name>"
 $env:MARKET_DATA_CACHE_GCS_PREFIX="market-data-cache"
 ```
 
-Cloud Storageバケット側で、cache objectを1日で削除するライフサイクルルールを設定する運用を推奨します。このアプリはバケット作成やライフサイクル設定の自動作成は行いません。
+Cloud Storageバケット側で、cache objectを1日で削除するライフサイクルルールを設定する運用を推奨します。Cloud Run公開用のGCPリソースは [`infra/gcp`](infra/gcp) のTerraformで作成できます。
 
 J-Quantsのキャッシュはcredential scope単位で分離します。画面入力されたAPIキーはSHA-256 hashをscopeとして使い、APIキー生値はcache key、ファイル名、object名、cache本文、レスポンス、ログに保存しません。
 
-### Required Google Cloud setup
+### Google Cloud setup with Terraform
 
-- Cloud Run service: `stock-drawdown-chart-web`
-- Region: `asia-northeast1`
+GCP側のArtifact Registry、Cloud Storage cache bucket、Workload Identity Federation、Service Account、IAMはTerraformで準備できます。
+
+Terraform definition:
+
+```text
+infra/gcp/
+├── README.md
+├── main.tf
+├── variables.tf
+├── outputs.tf
+├── versions.tf
+└── terraform.tfvars.example
+```
+
+#### Manual prerequisites
+
+事前に以下だけ手動で準備します。
+
+- Google Cloud projectを作成または選択する。
+- 課金を有効化する。
+- Terraformをインストールする。
+- Google Cloud CLIをインストールする。
+- Google OAuth Client IDを作成する。
+  - アプリのGoogleログイン用です。
+  - 取得したclient IDを後でGitHub Secret `GOOGLE_CLIENT_ID` に設定します。
+
+Terraform実行用にローカルでGoogle Cloudへ認証します。
+
+```powershell
+gcloud auth application-default login
+gcloud config set project <project-id>
+gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com
+```
+
+#### Provision infrastructure
+
+Terraform変数ファイルを作成します。
+
+```powershell
+Copy-Item infra/gcp/terraform.tfvars.example infra/gcp/terraform.tfvars
+```
+
+`infra/gcp/terraform.tfvars` を編集します。
+
+```hcl
+project_id   = "your-gcp-project-id"
+github_owner = "your-github-owner"
+github_repo  = "drawdown-chart"
+```
+
+インフラを作成します。
+
+```powershell
+cd infra/gcp
+terraform init
+terraform plan
+terraform apply
+terraform output
+```
+
+Terraformは主に以下を作成します。
+
+- Required Google Cloud APIs
 - Artifact Registry repository: `stock-drawdown`
-- Authentication from GitHub Actions: Workload Identity Federation
-- Runtime access: Cloud Run allows unauthenticated requests, but the app requires Google login and allows only `ALLOWED_EMAIL`.
+- Cloud Storage cache bucket
+- cache objectの1日削除lifecycle rule
+- GitHub Actions deploy service account
+- Cloud Run runtime service account: `stock-drawdown-runtime`
+- Workload Identity Pool / Provider
+- GitHub Actions OIDC用IAM binding
+- Cloud Run runtime service accountのcache bucket read/write権限
 
-Grant the GitHub Actions deploy service account permissions for Cloud Run deploy, Artifact Registry, Cloud Build, and service account usage.
+Cloud Run service本体は、release tag push時にGitHub Actionsが作成または更新します。
 
 ### Required GitHub secrets
 
 Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> Repository secrets`.
 
-- `GCP_PROJECT_ID`
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`
-- `GCP_SERVICE_ACCOUNT`
-- `GOOGLE_CLIENT_ID`
-- `ALLOWED_EMAIL`
+- `GCP_PROJECT_ID`: your Google Cloud project ID
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`: `terraform output -raw workload_identity_provider`
+- `GCP_SERVICE_ACCOUNT`: `terraform output -raw deploy_service_account_email`
+- `GOOGLE_CLIENT_ID`: Google OAuth client ID
+- `ALLOWED_EMAIL`: the only Google account allowed to use the app
+
+### Required GitHub variables
+
+Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> Variables`.
+
+- `MARKET_DATA_PROVIDER`: `jquants`
+- `MARKET_DATA_CACHE_BACKEND`: `gcs`
+- `MARKET_DATA_CACHE_GCS_BUCKET`: `terraform output -raw cache_bucket_name`
+- `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+
+For public hosting, do not set `JQUANTS_API_KEY` on Cloud Run. Users should provide their own J-Quants API key in the web UI.
 
 ### Release flow
 
