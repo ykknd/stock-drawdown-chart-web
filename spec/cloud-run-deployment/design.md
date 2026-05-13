@@ -17,6 +17,8 @@
 
 - React静的ファイルをFastAPIから配信する単一サービス構成。
 - Cloud Runの環境変数でGoogleログインと許可メールを制御する。
+- Cloud Runの環境変数でJ-Quants providerとGCS cacheを制御する。
+- 公開環境では共有 `JQUANTS_API_KEY` を設定しない。
 - 最小運用は `min instances: 0`、`max instances: 1` とする。
 
 ## Secrets
@@ -26,3 +28,17 @@
 - `GCP_SERVICE_ACCOUNT`
 - `GOOGLE_CLIENT_ID`
 - `ALLOWED_EMAIL`
+
+## Repository Variables
+
+- `MARKET_DATA_PROVIDER`: `jquants`
+- `MARKET_DATA_CACHE_BACKEND`: `gcs`
+- `MARKET_DATA_CACHE_GCS_BUCKET`: cache用Cloud Storage bucket名
+- `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+
+## Cloud Storage Cache
+
+- cache bucketはGCP側で手動作成する。
+- cache bucketには1日削除のObject Lifecycle ruleを設定する。
+- lifecycle削除は非同期であり、即時削除を保証しない。
+- Cloud Run runtime service accountにはcache bucketへの最小限のobject read/write権限を付与する。
