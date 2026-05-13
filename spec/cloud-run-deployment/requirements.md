@@ -16,6 +16,8 @@
 - 公開Cloud Runでは共有 `JQUANTS_API_KEY` を設定せず、利用者が自身のJ-Quants APIキーを画面入力するBYOキー運用にする。
 - 公開Cloud Runでは `MARKET_DATA_CACHE_BACKEND=gcs` を使い、Cloud Storageに日次マーケットデータキャッシュを保存する。
 - J-Quants providerとGCS cacheの設定値はGitHub Repository VariablesからCloud Run環境変数へ渡す。
+- GCP側のArtifact Registry、Cloud Storage cache bucket、Workload Identity Federation、Service Account、IAMはTerraformで構築できる。
+- Cloud Run runtime service accountにはGCS cache bucketへのobject read/write権限を付与する。
 - READMEに必要なGitHub Secretsと推奨設定を記載する。
 
 ## Out of Scope
@@ -31,3 +33,4 @@
 - 許可されたGoogleアカウントのみアプリを利用できる。
 - Cloud Run runtimeではJ-Quants BYOキー運用になり、共有 `JQUANTS_API_KEY` が設定されない。
 - Cloud Run runtimeではGCS cache用の環境変数が設定される。
+- TerraformでGCP側の必要リソースを作成でき、outputsからGitHub Secrets / Variablesの値を確認できる。
