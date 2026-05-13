@@ -88,6 +88,29 @@ h1 {
   font-size: 0.96rem;
 }
 
+.title-row {
+  display: flex;
+  gap: 16px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.help-toggle {
+  flex: 0 0 auto;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 14px;
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.help-toggle:hover {
+  background: #f5f8fa;
+}
+
 .symbol-form {
   display: grid;
   grid-template-columns: minmax(360px, 1fr) 116px auto 104px;
@@ -353,6 +376,52 @@ h1 {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.7;
+}
+
+.help-page {
+  display: grid;
+  gap: 14px;
+  padding: 8px 0 10px;
+}
+
+.help-page h2 {
+  font-size: 1.6rem;
+}
+
+.faq-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.faq-card h3 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+.faq-card p {
+  margin-top: 12px;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.help-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  line-height: 1.8;
+}
+
+.help-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.help-links a {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .dirty-notice {

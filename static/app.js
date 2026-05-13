@@ -801,6 +801,35 @@ function ResultCard({ result, ddRange, marketEvents, technicalIndicators, dateRa
   );
 }
 
+function HelpPage() {
+  return h(
+    "section",
+    { className: "help-page" },
+    h("h2", null, "ヘルプ / FAQ"),
+    h(
+      "article",
+      { className: "faq-card" },
+      h("h3", null, "Q1. J-Quants APIキーはどう取得しますか？"),
+      h("p", null, "J-Quants公式サイトでユーザー登録とAPI利用手続きを行い、取得したトークンをこのサイトのJ-Quants APIキー欄に入力してください。"),
+      h(
+        "div",
+        { className: "help-links" },
+        h(
+          "a",
+          { href: "https://jpx-jquants.com/ja", target: "_blank", rel: "noreferrer" },
+          "J-Quants公式サイトを開く"
+        )
+      )
+    ),
+    h(
+      "article",
+      { className: "faq-card" },
+      h("h3", null, "問い合わせ"),
+      h("p", null, "問い合わせフォームは準備中です。")
+    )
+  );
+}
+
 function App() {
   const [selectedSecurityCodes, setSelectedSecurityCodes] = useState(() =>
     uniqueCodes(
@@ -840,6 +869,7 @@ function App() {
   });
   const [authToken, setAuthToken] = useState("");
   const [authError, setAuthError] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -1154,7 +1184,16 @@ function App() {
       h(
         "header",
         { className: "topbar" },
-        h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
+        h(
+          "div",
+          { className: "title-row" },
+          h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
+          h(
+            "button",
+            { type: "button", className: "help-toggle", onClick: () => setShowHelp(!showHelp) },
+            showHelp ? "チャートに戻る" : "ヘルプ / FAQ"
+          )
+        ),
         h(
           "form",
           { className: "symbol-form", onSubmit },
@@ -1383,12 +1422,14 @@ function App() {
     h(
       "section",
       { className: "chart-scroll" },
-      h(
-        "div",
-        { className: "results-grid" },
-        h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents, dateRange: visibleRange }),
-        zoomedResults.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange }))
-      ),
+      showHelp
+        ? h(HelpPage)
+        : h(
+            "div",
+            { className: "results-grid" },
+            h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents, dateRange: visibleRange }),
+            zoomedResults.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange }))
+          ),
       h(
         "footer",
         { className: "privacy-footer" },
