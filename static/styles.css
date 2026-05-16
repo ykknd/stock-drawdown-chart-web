@@ -33,9 +33,24 @@ input {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  width: min(1180px, calc(100% - 32px));
+  width: min(1420px, calc(100% - 32px));
   margin: 0 auto;
   padding: 0;
+}
+
+.workspace-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.workspace-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .settings-panel {
@@ -547,35 +562,42 @@ h1 {
   accent-color: var(--drawdown);
 }
 
-.legend {
-  display: flex;
-  gap: 18px;
-  justify-content: flex-end;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.legend span::before {
-  content: "";
-  display: inline-block;
-  width: 18px;
-  height: 3px;
-  margin-right: 8px;
-  vertical-align: middle;
-  border-radius: 99px;
-}
-
-.legend-price::before {
-  background: var(--price);
-}
-
-.legend-drawdown::before {
-  background: var(--drawdown);
-}
-
 .results-grid {
   display: grid;
   gap: 16px;
+}
+
+.affiliate-ad-panel {
+  position: sticky;
+  top: 20px;
+  display: grid;
+  gap: 10px;
+  align-self: start;
+  margin-top: 32px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.affiliate-ad-label {
+  width: fit-content;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.affiliate-ad-panel strong {
+  font-size: 1rem;
+}
+
+.affiliate-ad-panel p {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.65;
 }
 
 .comparison-panel {
@@ -958,6 +980,14 @@ svg {
     width: min(100% - 20px, 1180px);
   }
 
+  .workspace-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-main {
+    min-height: auto;
+  }
+
   .settings-panel {
     padding-top: 14px;
     box-shadow: none;
@@ -966,6 +996,12 @@ svg {
   .chart-scroll {
     overflow: visible;
     padding: 14px 0 36px;
+  }
+
+  .affiliate-ad-panel {
+    position: static;
+    order: 2;
+    margin-top: 0;
   }
 
   .topbar,

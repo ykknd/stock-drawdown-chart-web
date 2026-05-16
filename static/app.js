@@ -830,6 +830,16 @@ function HelpPage() {
   );
 }
 
+function AffiliateAdPanel() {
+  return h(
+    "aside",
+    { className: "affiliate-ad-panel", "aria-label": "広告" },
+    h("span", { className: "affiliate-ad-label" }, "広告 / PR"),
+    h("strong", null, "証券口座"),
+    h("p", null, "証券口座の比較・申込リンクを掲載予定です。")
+  );
+}
+
 function App() {
   const [selectedSecurityCodes, setSelectedSecurityCodes] = useState(() =>
     uniqueCodes(
@@ -1179,262 +1189,267 @@ function App() {
     "main",
     { className: "app-shell" },
     h(
-      "section",
-      { className: "settings-panel" },
-      h(
-        "header",
-        { className: "topbar" },
-        h(
-          "div",
-          { className: "title-row" },
-          h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
-          h(
-            "button",
-            { type: "button", className: "help-toggle", onClick: () => setShowHelp(!showHelp) },
-            showHelp ? "チャートに戻る" : "ヘルプ / FAQ"
-          )
-        ),
-        h(
-          "form",
-          { className: "symbol-form", onSubmit },
-          h(
-            "div",
-            { className: "security-selector" },
-            h("input", {
-              value: securitySearch,
-              onChange: (event) => setSecuritySearch(event.target.value),
-              placeholder: "企業名・銘柄名で検索",
-              "aria-label": "銘柄名検索",
-              disabled: loading,
-            }),
-            normalizedSecuritySearch
-              ? h(
-                  "div",
-                  { className: "security-candidates" },
-                  filteredSecurities.length
-                    ? filteredSecurities.map((security) => {
-                        const code = normalizeSecurityCode(security.code);
-                        const selected = selectedSecurityCodes.includes(code);
-                        const disabled = selected || selectedSecurityCodes.length >= selectionLimit;
-                        return h(
-                          "button",
-                          {
-                            key: code,
-                            type: "button",
-                            className: "security-candidate",
-                            disabled,
-                            onClick: () => addSecurity(code),
-                          },
-                          h("span", null, security.name),
-                          h("small", null, code)
-                        );
-                      })
-                    : h("div", { className: "security-empty" }, "候補がありません")
-                )
-              : null,
-            h(
-              "div",
-              { className: "selected-securities" },
-              selectedSecurityCodes.length
-                ? selectedSecurityCodes.map((code) => {
-                    const security = securitiesByCode.get(code);
-                    const label = security ? `${security.name}（${code}）` : code;
-                    return h(
-                      "span",
-                      { key: code, className: "security-chip" },
-                      h("span", null, label),
-                      h("button", { type: "button", onClick: () => removeSecurity(code), "aria-label": `${label}を削除` }, "×")
-                    );
-                  })
-                : h("span", { className: "security-empty" }, "銘柄を選択してください")
-            )
-          ),
-          h(
-            "select",
-            { value: period, onChange: onPeriodChange, "aria-label": "表示期間", disabled: loading },
-            PERIOD_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
-          ),
-          period === "custom"
-            ? h(
-                "div",
-                { className: "custom-period" },
-                h("input", {
-                  type: "number",
-                  min: "0",
-                  max: "50",
-                  value: Math.floor(customMonths / 12),
-                  onChange: onCustomYearsChange,
-                  "aria-label": "カスタム期間 年",
-                }),
-                h("span", null, "年"),
-                h("input", {
-                  type: "number",
-                  min: "0",
-                  max: "11",
-                  value: customMonths % 12,
-                  onChange: onCustomRemainderMonthsChange,
-                  "aria-label": "カスタム期間 月",
-                }),
-                h("span", null, "か月")
-              )
-            : null,
-          h("button", { type: "submit", disabled: loading || symbols.length === 0 || overSelectionLimit }, loading ? "取得中" : "更新")
-        )
-      ),
-      dirty ? h("div", { className: "notice dirty-notice" }, "設定変更は未反映です。更新を押してください") : null,
-      securityNotice ? h("div", { className: "notice" }, securityNotice) : null,
-      overSelectionLimit
-        ? h("div", { className: "notice" }, "J-Quants無料枠では最大5銘柄まで選択できます。選択数を減らしてください。")
-        : null,
-      appConfig.market_data_provider === "jquants"
-        ? h(
-            "details",
-            { className: "jquants-settings-panel", open: true },
-            h("summary", null, "J-Quants設定"),
-            h(
-              "div",
-              { className: "jquants-settings-body" },
-              h(
-                "div",
-                { className: "jquants-tier-panel" },
-                h(
-                  "label",
-                  { className: "jquants-tier-control" },
-                  h("input", {
-                    type: "checkbox",
-                    checked: jquantsFreeTier,
-                    onChange: onJQuantsFreeTierChange,
-                  }),
-                  h("span", null, "J-Quants無料枠"),
-                  h("small", null, "無料枠では直近12週を除いた範囲を取得します。有料枠の場合はチェックを外してください。")
-                )
-              ),
-              appConfig.requires_jquants_api_key_input
-                ? h(
-                    "div",
-                    { className: "jquants-key-panel" },
-                    h(
-                      "div",
-                      { className: "jquants-key-input" },
-                      h("span", null, "J-Quants APIキー:"),
-                      h("input", {
-                        type: "password",
-                        value: jquantsApiKey,
-                        onChange: (event) => setJquantsApiKey(event.target.value),
-                        placeholder: "J-Quants APIキーを入力",
-                        "aria-label": "J-Quants APIキー",
-                      }),
-                      h("small", null, "環境変数 JQUANTS_API_KEY を設定すると入力を省けます。")
-                    )
-                  )
-                : null
-            )
-          )
-        : null,
-      error ? h("div", { className: "notice" }, error) : null,
+      "div",
+      { className: "workspace-shell" },
       h(
         "div",
-        { className: "chart-controls" },
+        { className: "workspace-main" },
         h(
-          "label",
-          { className: "range-control" },
-          h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
-          h("input", {
-            type: "range",
-            min: "1",
-            max: "100",
-            step: "1",
-            value: ddRange,
-            onChange: onDdRangeChange,
-            "aria-label": "DD軸レンジ",
-          })
-        ),
-        h(
-          "label",
-          { className: "range-control" },
-          h("span", null, `表示期間 ${xZoom}%`),
-          h("input", {
-            type: "range",
-            min: "5",
-            max: "100",
-            step: "1",
-            value: xZoom,
-            onChange: onXZoomChange,
-            "aria-label": "x軸表示期間",
-          })
-        ),
-        h(
-          "label",
-          { className: "candle-control" },
-          h("span", null, "ローソク足"),
+          "section",
+          { className: "settings-panel" },
           h(
-            "select",
-            { value: candleInterval, onChange: onCandleIntervalChange, "aria-label": "ローソク足の粒度", disabled: loading },
-            CANDLE_INTERVAL_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
-          )
-        ),
-        h(
-          "div",
-          { className: "indicator-control" },
-          h("span", null, "テクニカル"),
-          h(
-            "div",
-            { className: "indicator-options" },
-            TECHNICAL_INDICATOR_OPTIONS.map(([value, label]) => {
-              const setting = technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value];
-              return h(
+            "header",
+            { className: "topbar" },
+            h(
+              "div",
+              { className: "title-row" },
+              h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
+              h(
+                "button",
+                { type: "button", className: "help-toggle", onClick: () => setShowHelp(!showHelp) },
+                showHelp ? "チャートに戻る" : "ヘルプ / FAQ"
+              )
+            ),
+            h(
+              "form",
+              { className: "symbol-form", onSubmit },
+              h(
                 "div",
-                { key: value, className: "indicator-option" },
-                h(
-                  "label",
-                  null,
-                  h("input", {
-                    type: "checkbox",
-                    value,
-                    checked: Boolean(setting.enabled),
-                    onChange: onTechnicalIndicatorEnabledChange,
-                  }),
-                  h("span", null, label)
-                ),
-                h("span", { className: "indicator-separator" }, ":"),
+                { className: "security-selector" },
                 h("input", {
-                  type: "number",
-                  min: "1",
-                  max: "100",
-                  step: "1",
-                  value: setting.period,
-                  disabled: !setting.enabled,
-                  onChange: (event) => onTechnicalIndicatorPeriodChange(value, event.target.value),
-                  "aria-label": `${label} 集約期間`,
+                  value: securitySearch,
+                  onChange: (event) => setSecuritySearch(event.target.value),
+                  placeholder: "企業名・銘柄名で検索",
+                  "aria-label": "銘柄名検索",
+                  disabled: loading,
+                }),
+                normalizedSecuritySearch
+                  ? h(
+                      "div",
+                      { className: "security-candidates" },
+                      filteredSecurities.length
+                        ? filteredSecurities.map((security) => {
+                            const code = normalizeSecurityCode(security.code);
+                            const selected = selectedSecurityCodes.includes(code);
+                            const disabled = selected || selectedSecurityCodes.length >= selectionLimit;
+                            return h(
+                              "button",
+                              {
+                                key: code,
+                                type: "button",
+                                className: "security-candidate",
+                                disabled,
+                                onClick: () => addSecurity(code),
+                              },
+                              h("span", null, security.name),
+                              h("small", null, code)
+                            );
+                          })
+                        : h("div", { className: "security-empty" }, "候補がありません")
+                    )
+                  : null,
+                h(
+                  "div",
+                  { className: "selected-securities" },
+                  selectedSecurityCodes.length
+                    ? selectedSecurityCodes.map((code) => {
+                        const security = securitiesByCode.get(code);
+                        const label = security ? `${security.name}（${code}）` : code;
+                        return h(
+                          "span",
+                          { key: code, className: "security-chip" },
+                          h("span", null, label),
+                          h("button", { type: "button", onClick: () => removeSecurity(code), "aria-label": `${label}を削除` }, "×")
+                        );
+                      })
+                    : h("span", { className: "security-empty" }, "銘柄を選択してください")
+                )
+              ),
+              h(
+                "select",
+                { value: period, onChange: onPeriodChange, "aria-label": "表示期間", disabled: loading },
+                PERIOD_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
+              ),
+              period === "custom"
+                ? h(
+                    "div",
+                    { className: "custom-period" },
+                    h("input", {
+                      type: "number",
+                      min: "0",
+                      max: "50",
+                      value: Math.floor(customMonths / 12),
+                      onChange: onCustomYearsChange,
+                      "aria-label": "カスタム期間 年",
+                    }),
+                    h("span", null, "年"),
+                    h("input", {
+                      type: "number",
+                      min: "0",
+                      max: "11",
+                      value: customMonths % 12,
+                      onChange: onCustomRemainderMonthsChange,
+                      "aria-label": "カスタム期間 月",
+                    }),
+                    h("span", null, "か月")
+                  )
+                : null,
+              h("button", { type: "submit", disabled: loading || symbols.length === 0 || overSelectionLimit }, loading ? "取得中" : "更新")
+            )
+          ),
+          dirty ? h("div", { className: "notice dirty-notice" }, "設定変更は未反映です。更新を押してください") : null,
+          securityNotice ? h("div", { className: "notice" }, securityNotice) : null,
+          overSelectionLimit
+            ? h("div", { className: "notice" }, "J-Quants無料枠では最大5銘柄まで選択できます。選択数を減らしてください。")
+            : null,
+          appConfig.market_data_provider === "jquants"
+            ? h(
+                "details",
+                { className: "jquants-settings-panel", open: true },
+                h("summary", null, "J-Quants設定"),
+                h(
+                  "div",
+                  { className: "jquants-settings-body" },
+                  h(
+                    "div",
+                    { className: "jquants-tier-panel" },
+                    h(
+                      "label",
+                      { className: "jquants-tier-control" },
+                      h("input", {
+                        type: "checkbox",
+                        checked: jquantsFreeTier,
+                        onChange: onJQuantsFreeTierChange,
+                      }),
+                      h("span", null, "J-Quants無料枠"),
+                      h("small", null, "無料枠では直近12週を除いた範囲を取得します。有料枠の場合はチェックを外してください。")
+                    )
+                  ),
+                  appConfig.requires_jquants_api_key_input
+                    ? h(
+                        "div",
+                        { className: "jquants-key-panel" },
+                        h(
+                          "div",
+                          { className: "jquants-key-input" },
+                          h("span", null, "J-Quants APIキー:"),
+                          h("input", {
+                            type: "password",
+                            value: jquantsApiKey,
+                            onChange: (event) => setJquantsApiKey(event.target.value),
+                            placeholder: "J-Quants APIキーを入力",
+                            "aria-label": "J-Quants APIキー",
+                          }),
+                          h("small", null, "環境変数 JQUANTS_API_KEY を設定すると入力を省けます。")
+                        )
+                      )
+                    : null
+                )
+              )
+            : null,
+          error ? h("div", { className: "notice" }, error) : null,
+          h(
+            "div",
+            { className: "chart-controls" },
+            h(
+              "label",
+              { className: "range-control" },
+              h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
+              h("input", {
+                type: "range",
+                min: "1",
+                max: "100",
+                step: "1",
+                value: ddRange,
+                onChange: onDdRangeChange,
+                "aria-label": "DD軸レンジ",
+              })
+            ),
+            h(
+              "label",
+              { className: "range-control" },
+              h("span", null, `表示期間 ${xZoom}%`),
+              h("input", {
+                type: "range",
+                min: "5",
+                max: "100",
+                step: "1",
+                value: xZoom,
+                onChange: onXZoomChange,
+                "aria-label": "x軸表示期間",
+              })
+            ),
+            h(
+              "label",
+              { className: "candle-control" },
+              h("span", null, "ローソク足"),
+              h(
+                "select",
+                { value: candleInterval, onChange: onCandleIntervalChange, "aria-label": "ローソク足の粒度", disabled: loading },
+                CANDLE_INTERVAL_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
+              )
+            ),
+            h(
+              "div",
+              { className: "indicator-control" },
+              h("span", null, "テクニカル"),
+              h(
+                "div",
+                { className: "indicator-options" },
+                TECHNICAL_INDICATOR_OPTIONS.map(([value, label]) => {
+                  const setting = technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value];
+                  return h(
+                    "div",
+                    { key: value, className: "indicator-option" },
+                    h(
+                      "label",
+                      null,
+                      h("input", {
+                        type: "checkbox",
+                        value,
+                        checked: Boolean(setting.enabled),
+                        onChange: onTechnicalIndicatorEnabledChange,
+                      }),
+                      h("span", null, label)
+                    ),
+                    h("span", { className: "indicator-separator" }, ":"),
+                    h("input", {
+                      type: "number",
+                      min: "1",
+                      max: "100",
+                      step: "1",
+                      value: setting.period,
+                      disabled: !setting.enabled,
+                      onChange: (event) => onTechnicalIndicatorPeriodChange(value, event.target.value),
+                      "aria-label": `${label} 集約期間`,
+                    })
+                  );
                 })
-              );
-            })
+              )
+            )
           )
         ),
         h(
-          "div",
-          { className: "legend" },
-          h("span", { className: "legend-price" }, "価格"),
-          h("span", { className: "legend-drawdown" }, "Drawdown")
+          "section",
+          { className: "chart-scroll" },
+          showHelp
+            ? h(HelpPage)
+            : h(
+                "div",
+                { className: "results-grid" },
+                h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents, dateRange: visibleRange }),
+                zoomedResults.map((result) =>
+                  h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange })
+                )
+              ),
+          h(
+            "footer",
+            { className: "privacy-footer" },
+            "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+          )
         )
-      )
-    ),
-    h(
-      "section",
-      { className: "chart-scroll" },
-      showHelp
-        ? h(HelpPage)
-        : h(
-            "div",
-            { className: "results-grid" },
-            h(OverlayDrawdownChart, { results: zoomedResults, ddRange, marketEvents, dateRange: visibleRange }),
-            zoomedResults.map((result) => h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange }))
-          ),
-      h(
-        "footer",
-        { className: "privacy-footer" },
-        "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
-      )
+      ),
+      h(AffiliateAdPanel)
     )
   );
 }
