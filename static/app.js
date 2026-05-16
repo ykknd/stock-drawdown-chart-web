@@ -8,6 +8,18 @@ const CANDLE_INTERVAL_STORAGE_KEY = "drawdown-board-candle-interval";
 const DD_RANGE_STORAGE_KEY = "drawdown-board-dd-range";
 const X_ZOOM_STORAGE_KEY = "drawdown-board-x-zoom";
 const TECHNICAL_INDICATORS_STORAGE_KEY = "drawdown-board-technical-indicators";
+const AFFILIATE_ADS = [
+  {
+    label: "広告 / PR",
+    title: "5年で1億貯める株式投資",
+    description: "給料に手をつけず爆速でお金を増やす4つの投資法 [ kenmo（湘南投資勉強会） ]",
+    price: "価格: 1870円",
+    note: "(2026/5/16 15:52時点) / 感想(29件)",
+    href: "https://rpx.a8.net/svt/ejp?a8mat=4B3RV1+E80T0Y+2HOM+BWGDT&rakuten=y&a8ejpredirect=https%3A%2F%2Fhb.afl.rakuten.co.jp%2Fhgc%2Fg00q0724.2bo11c45.g00q0724.2bo12179%2Fa26051613923_4B3RV1_E80T0Y_2HOM_BWGDT%3Fpc%3Dhttps%253A%252F%252Fitem.rakuten.co.jp%252Fbook%252F18158375%252F%26m%3Dhttp%253A%252F%252Fm.rakuten.co.jp%252Fbook%252Fi%252F21543588%252F%26rafcid%3Dwsc_i_is_a9f492a7-8ef9-40e2-ab89-4bc43a1ee283",
+    imageSrc: "https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/1184/9784478121184_1_13.jpg?_ex=64x64",
+    trackingPixelSrc: "https://www17.a8.net/0.gif?a8mat=4B3RV1+E80T0Y+2HOM+BWGDT",
+  },
+];
 const DEFAULT_SYMBOLS = "7203, 6758, 9984";
 const DEFAULT_SECURITY_CODES = ["7203", "6758", "9984"];
 const BENCHMARK_SYMBOL = "^N225";
@@ -824,8 +836,141 @@ function HelpPage() {
     h(
       "article",
       { className: "faq-card" },
+      h("h3", null, "Q2. Googleログイン情報はなぜ必要なのですか？"),
+      h(
+        "p",
+        null,
+        "公開サイトとしての不正利用を抑えるため、本人確認にGoogleログインを使っています。確認するのはGoogleが検証したID tokenとメールアドレスで、Googleパスワード、Google APIアクセストークン、refresh token、GmailやDriveへの権限は取得しません。メールアドレスはアクセス判定にのみ使い、永続保存しません。"
+      )
+    ),
+    h(
+      "article",
+      { className: "faq-card" },
+      h("h3", null, "Q3. J-Quants APIキーはなぜ必要なのですか？安全に利用されるのですか？"),
+      h(
+        "p",
+        null,
+        "株価データをJ-Quantsから取得するために必要です。このサイトは利用者自身のAPIキーで価格取得を行う方針です。入力されたキーは価格取得リクエスト時だけサーバーへ送信され、ブラウザやサーバーに永続保存しません。キャッシュ分離が必要な場合も、キーの生値ではなくハッシュを使います。"
+      )
+    ),
+    h(
+      "article",
+      { className: "faq-card" },
+      h("h3", null, "Q4. 分析ツールの開発をしたい"),
+      h(
+        "p",
+        null,
+        "このサイトの実装はGitHubで公開しています。構成や実装を参考にしたい場合は、リポジトリをご覧ください。"
+      ),
+      h(
+        "div",
+        { className: "help-links" },
+        h(
+          "a",
+          { href: "https://github.com/ykknd/stock-drawdown-chart-web", target: "_blank", rel: "noreferrer" },
+          "GitHubリポジトリを開く"
+        )
+      )
+    ),
+    h(
+      "article",
+      { className: "faq-card" },
       h("h3", null, "問い合わせ"),
       h("p", null, "問い合わせフォームは準備中です。")
+    )
+  );
+}
+
+function DrawdownPreviewFigure() {
+  return h(
+    "figure",
+    { className: "public-preview" },
+    h(
+      "svg",
+      {
+        viewBox: "0 0 560 320",
+        role: "img",
+        "aria-labelledby": "preview-title preview-desc",
+      },
+      h("title", { id: "preview-title" }, "株価とdrawdownの見方"),
+      h("desc", { id: "preview-desc" }, "株価の高値、下落、回復とdrawdown率の関係を示した図"),
+      h("rect", { x: 0, y: 0, width: 560, height: 320, rx: 8, className: "preview-surface" }),
+      h("line", { x1: 44, y1: 54, x2: 516, y2: 54, className: "preview-grid" }),
+      h("line", { x1: 44, y1: 118, x2: 516, y2: 118, className: "preview-grid" }),
+      h("line", { x1: 44, y1: 182, x2: 516, y2: 182, className: "preview-grid" }),
+      h("line", { x1: 44, y1: 246, x2: 516, y2: 246, className: "preview-grid" }),
+      h("line", { x1: 44, y1: 266, x2: 516, y2: 266, className: "preview-axis" }),
+      h("line", { x1: 44, y1: 34, x2: 44, y2: 266, className: "preview-axis" }),
+      h("path", {
+        d: "M44 170 C84 150 108 96 148 104 C182 110 206 70 248 82 C288 92 312 176 350 206 C386 234 420 170 450 132 C474 102 492 112 516 92",
+        className: "preview-price-line",
+      }),
+      h("path", {
+        d: "M44 58 L100 58 L148 58 L206 58 L248 58 C286 58 308 122 350 178 C386 226 420 168 450 124 C474 88 492 88 516 88",
+        className: "preview-peak-line",
+      }),
+      h("path", {
+        d: "M44 266 L44 58 L100 58 L148 58 L206 58 L248 58 C286 58 308 122 350 178 C386 226 420 168 450 124 C474 88 492 88 516 88 L516 266 Z",
+        className: "preview-dd-fill",
+      }),
+      h("line", { x1: 350, y1: 34, x2: 350, y2: 266, className: "preview-event-line" }),
+      h("circle", { cx: 248, cy: 82, r: 6, className: "preview-peak-dot" }),
+      h("circle", { cx: 350, cy: 206, r: 6, className: "preview-trough-dot" }),
+      h("circle", { cx: 516, cy: 92, r: 6, className: "preview-recovery-dot" }),
+      h("text", { x: 256, y: 70, className: "preview-label" }, "高値"),
+      h("text", { x: 362, y: 220, className: "preview-label" }, "底値"),
+      h("text", { x: 430, y: 78, className: "preview-label" }, "回復"),
+      h("text", { x: 360, y: 48, className: "preview-event-label" }, "暴落日"),
+      h("text", { x: 48, y: 302, className: "preview-caption" }, "株価推移とdrawdownの関係")
+    )
+  );
+}
+
+function PublicLandingPage({ authError }) {
+  return h(
+    "main",
+    { className: "app-shell public-shell" },
+    h(
+      "div",
+      { className: "public-workspace" },
+      h(
+        "div",
+        { className: "public-main" },
+        h(
+          "section",
+          { className: "public-hero" },
+          h(
+            "div",
+            { className: "public-copy" },
+            h("p", { className: "eyebrow" }, "日本株の下落耐性を可視化"),
+            h("h1", null, "Drawdown Board"),
+            h(
+              "p",
+              { className: "public-lead" },
+              "選んだ銘柄の株価、drawdown、回復までの日数を並べて比較できる分析ツールです。銘柄名で検索し、期間を選び、下落の深さと戻り方を一画面で確認できます。"
+            ),
+            h("p", { className: "public-login-note" }, "分析機能の利用にはGoogleログインが必要です。"),
+            h("div", { id: "google-signin", className: "google-signin" }),
+            h("p", { className: "public-key-note" }, "利用にはJ-Quants APIキーが必要です。ログイン後に入力して株価データを取得します。"),
+            authError ? h("div", { className: "notice" }, authError) : null
+          ),
+          h(DrawdownPreviewFigure)
+        ),
+        h(
+          "section",
+          { className: "public-feature-strip" },
+          h("div", null, h("strong", null, "Drawdown比較"), h("span", null, "複数銘柄を同じ軸で比較")),
+          h("div", null, h("strong", null, "回復力"), h("span", null, "高値から底値、回復日まで表示")),
+          h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替"))
+        ),
+        h(HelpPage),
+        h(
+          "footer",
+          { className: "privacy-footer public-privacy-footer" },
+          "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+        )
+      ),
+      h(AffiliateAdPanel)
     )
   );
 }
@@ -834,9 +979,27 @@ function AffiliateAdPanel() {
   return h(
     "aside",
     { className: "affiliate-ad-panel", "aria-label": "広告" },
-    h("span", { className: "affiliate-ad-label" }, "広告 / PR"),
-    h("strong", null, "証券口座"),
-    h("p", null, "証券口座の比較・申込リンクを掲載予定です。")
+    AFFILIATE_ADS.map((ad) =>
+      h(
+        "article",
+        { className: "affiliate-ad-item", key: ad.href },
+        h("span", { className: "affiliate-ad-label" }, ad.label),
+        h(
+          "a",
+          { className: "affiliate-ad-body", href: ad.href, target: "_blank", rel: "nofollow sponsored noreferrer" },
+          h("img", { className: "affiliate-ad-image", src: ad.imageSrc, alt: "", width: 64, height: 64 }),
+          h(
+            "span",
+            { className: "affiliate-ad-copy" },
+            h("strong", null, ad.title),
+            h("span", null, ad.description),
+            h("b", null, ad.price),
+            h("small", null, ad.note)
+          )
+        ),
+        h("img", { className: "affiliate-tracking-pixel", src: ad.trackingPixelSrc, alt: "", width: 1, height: 1 })
+      )
+    )
   );
 }
 
@@ -1171,18 +1334,7 @@ function App() {
   }
 
   if (appConfig.enabled && !authToken) {
-    return h(
-      "main",
-      { className: "app-shell" },
-      h(
-        "section",
-        { className: "auth-panel" },
-        h("h1", null, "Drawdown Board"),
-        h("p", null, "このページを開くにはGoogleログインが必要です。"),
-        h("div", { id: "google-signin", className: "google-signin" }),
-        authError ? h("div", { className: "notice" }, authError) : null
-      )
-    );
+    return h(PublicLandingPage, { authError });
   }
 
   return h(
