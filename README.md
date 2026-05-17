@@ -231,6 +231,36 @@ git push origin v0.1.0
 
 The workflow verifies that the tag commit is included in `origin/main` before deploying.
 
+### Custom domain with an external DNS provider
+
+Cloud Run の公開 URL を独自ドメインへ切り替える場合は、任意のレジストラや DNS サービスで取得したドメインを使えます。以下は、お名前.com のような外部 DNS サービスを使う場合の手順です。
+
+1. Google Search Console で対象ドメインの所有権確認を開始する。
+   - 取得した TXT verification record を DNS サービスへ追加する。
+   - DNS レコード編集画面で追加した TXT が外部から見えない場合は、ドメインがその DNS サービスのネームサーバーを実際に使っているか確認する。
+2. 所有権確認が完了したら、Cloud Run に domain mapping を作成する。
+
+   ```powershell
+   gcloud beta run domain-mappings create `
+     --service <cloud-run-service> `
+     --domain <your-domain> `
+     --region <region> `
+     --project <project-id>
+   ```
+
+3. Cloud Run が返した `A` / `AAAA` / `CNAME` レコードを、DNS サービスの対象ドメインへ追加する。
+   - レコード値はドメインごとにコマンド出力を確認して登録する。
+   - Google の確認用 TXT は残してよい。
+4. Google OAuth Client ID の `Authorized JavaScript origins` に、独自ドメインの origin を追加する。
+
+   ```text
+   https://<your-domain>
+   ```
+
+5. DNS 反映と Google 管理証明書の発行を待ち、HTTPS と Google ログインを確認する。
+
+独自ドメイン切り替え後は、外部へ案内する URL、広告サービスへ登録するメディア URL、README や SNS で共有する URL を独自ドメインへそろえる運用を推奨します。
+
 ## Specs
 
 機能要件、設計方針、実施順、実装実績は [`spec/README.md`](spec/README.md) で管理します。

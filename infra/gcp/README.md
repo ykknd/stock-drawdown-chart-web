@@ -77,7 +77,10 @@ Add these repository secrets:
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `terraform output -raw workload_identity_provider`
 - `GCP_SERVICE_ACCOUNT`: `terraform output -raw deploy_service_account_email`
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID for the web app
-- `ALLOWED_EMAIL`: the only Google account allowed to use the app
+
+Optional repository secret:
+
+- `ALLOWED_EMAIL`: set only for private single-email access. Leave unset for public hosting where any verified Google account may use the app.
 
 Add these repository variables:
 
@@ -87,6 +90,18 @@ Add these repository variables:
 - `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
 
 Do not set `JQUANTS_API_KEY` on public Cloud Run hosting. Users should enter their own key in the web UI.
+
+## Custom Domain
+
+Custom domain setup is manual and is not provisioned by this Terraform module.
+
+1. Verify ownership of the domain in Google Search Console by adding the issued TXT record at the external DNS provider.
+2. Create the Cloud Run domain mapping after verification succeeds.
+3. Add the DNS records returned by Cloud Run to the external DNS provider.
+4. Add `https://<your-domain>` to the Google OAuth Client ID `Authorized JavaScript origins`.
+5. Wait for DNS propagation and managed certificate provisioning, then verify HTTPS and Google login.
+
+If the DNS provider has a separate DNS-record editor and nameserver setting, confirm that the domain is delegated to the same nameservers where the TXT and routing records were added.
 
 ## Release
 

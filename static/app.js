@@ -821,8 +821,22 @@ function HelpPage() {
     h(
       "article",
       { className: "faq-card" },
-      h("h3", null, "Q1. J-Quants APIキーはどう取得しますか？"),
-      h("p", null, "J-Quants公式サイトでユーザー登録とAPI利用手続きを行い、取得したトークンをこのサイトのJ-Quants APIキー欄に入力してください。"),
+      h("h3", null, "Q1. Googleログイン情報はなぜ必要なのですか？"),
+      h(
+        "p",
+        null,
+        "公開サイトとしての不正利用を抑えるため、本人確認にGoogleログインを使っています。確認するのはGoogleが検証したID tokenとメールアドレスで、Googleパスワード、Google APIアクセストークン、refresh token、GmailやDriveへの権限は取得しません。メールアドレスはアクセス判定にのみ使い、永続保存しません。"
+      )
+    ),
+    h(
+      "article",
+      { className: "faq-card" },
+      h("h3", null, "Q2. J-Quants APIキーはなぜ必要なのですか？安全に利用されるのですか？"),
+      h(
+        "p",
+        null,
+        "株価データをJ-Quantsから取得するために必要です。このサイトは利用者自身のAPIキーで価格取得を行う方針です。入力されたキーは価格取得リクエスト時だけサーバーへ送信され、ブラウザやサーバーに永続保存しません。キャッシュ分離が必要な場合も、キーの生値ではなくハッシュを使います。APIキーはJ-Quants公式サイトでユーザー登録とAPI利用手続きを行って取得してください。"
+      ),
       h(
         "div",
         { className: "help-links" },
@@ -836,27 +850,7 @@ function HelpPage() {
     h(
       "article",
       { className: "faq-card" },
-      h("h3", null, "Q2. Googleログイン情報はなぜ必要なのですか？"),
-      h(
-        "p",
-        null,
-        "公開サイトとしての不正利用を抑えるため、本人確認にGoogleログインを使っています。確認するのはGoogleが検証したID tokenとメールアドレスで、Googleパスワード、Google APIアクセストークン、refresh token、GmailやDriveへの権限は取得しません。メールアドレスはアクセス判定にのみ使い、永続保存しません。"
-      )
-    ),
-    h(
-      "article",
-      { className: "faq-card" },
-      h("h3", null, "Q3. J-Quants APIキーはなぜ必要なのですか？安全に利用されるのですか？"),
-      h(
-        "p",
-        null,
-        "株価データをJ-Quantsから取得するために必要です。このサイトは利用者自身のAPIキーで価格取得を行う方針です。入力されたキーは価格取得リクエスト時だけサーバーへ送信され、ブラウザやサーバーに永続保存しません。キャッシュ分離が必要な場合も、キーの生値ではなくハッシュを使います。"
-      )
-    ),
-    h(
-      "article",
-      { className: "faq-card" },
-      h("h3", null, "Q4. 分析ツールの開発をしたい"),
+      h("h3", null, "Q3. 分析ツールの開発をしたい"),
       h(
         "p",
         null,
@@ -967,7 +961,8 @@ function PublicLandingPage({ authError }) {
         h(
           "footer",
           { className: "privacy-footer public-privacy-footer" },
-          "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+          h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
+          h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
         )
       ),
       h(AffiliateAdPanel)
@@ -1597,7 +1592,8 @@ function App() {
           h(
             "footer",
             { className: "privacy-footer" },
-            "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+            h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
+            h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
           )
         )
       ),
