@@ -393,6 +393,10 @@ h1 {
   line-height: 1.7;
 }
 
+.privacy-footer p + p {
+  margin-top: 6px;
+}
+
 .help-page {
   display: grid;
   gap: 14px;

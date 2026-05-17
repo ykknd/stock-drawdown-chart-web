@@ -961,7 +961,8 @@ function PublicLandingPage({ authError }) {
         h(
           "footer",
           { className: "privacy-footer public-privacy-footer" },
-          "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+          h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
+          h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
         )
       ),
       h(AffiliateAdPanel)
@@ -1591,7 +1592,8 @@ function App() {
           h(
             "footer",
             { className: "privacy-footer" },
-            "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"
+            h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
+            h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
           )
         )
       ),
