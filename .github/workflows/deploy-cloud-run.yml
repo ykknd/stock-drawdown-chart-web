@@ -10,14 +10,15 @@ permissions:
   id-token: write
 
 env:
-  SERVICE: stock-drawdown-chart-web
+  WEB_SERVICE: stock-drawdown-chart-web
+  FORECAST_SERVICE: stock-drawdown-forecast-api
   REGION: asia-northeast1
-  ARTIFACT_REPOSITORY: stock-drawdown
+  WEB_ARTIFACT_REPOSITORY: stock-drawdown
+  FORECAST_ARTIFACT_REPOSITORY: stock-drawdown-forecast
 
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -44,6 +45,15 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+  deploy-forecast:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      forecast_url: ${{ steps.forecast-url.outputs.url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -53,21 +63,73 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Ensure Artifact Registry repository
+      - name: Build forecast container
         run: |
-          gcloud artifacts repositories describe "$ARTIFACT_REPOSITORY" \
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$FORECAST_ARTIFACT_REPOSITORY/$FORECAST_SERVICE:${GITHUB_REF_NAME}"
+          echo "FORECAST_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          BUILD_ID="$(gcloud builds submit \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --location "$REGION" \
-          || gcloud artifacts repositories create "$ARTIFACT_REPOSITORY" \
-            --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --location "$REGION" \
-            --repository-format docker \
-            --description "Drawdown Chart Cloud Run images"
+            --config cloudbuild.forecast.yaml \
+            --substitutions "_IMAGE=$IMAGE" \
+            --async \
+            --format='value(id)' \
+            .)"
+          echo "Cloud Build ID: $BUILD_ID"
+          for attempt in $(seq 1 120); do
+            STATUS="$(gcloud builds describe "$BUILD_ID" --project "${{ secrets.GCP_PROJECT_ID }}" --format='value(status)')"
+            echo "Cloud Build status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) exit 0 ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED) exit 1 ;;
+            esac
+            sleep 5
+          done
+          exit 1
 
-      - name: Build container
+      - name: Deploy forecast service
         run: |
-          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$ARTIFACT_REPOSITORY/$SERVICE:${GITHUB_REF_NAME}"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          gcloud run deploy "$FORECAST_SERVICE" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --image "$FORECAST_IMAGE" \
+            --no-allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 1 \
+            --memory 2Gi \
+            --cpu 1 \
+            --service-account "stock-drawdown-forecast-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+
+      - name: Read forecast service URL
+        id: forecast-url
+        run: |
+          URL="$(gcloud run services describe "$FORECAST_SERVICE" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  deploy-web:
+    needs:
+      - verify
+      - deploy-forecast
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Build web container
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$WEB_ARTIFACT_REPOSITORY/$WEB_SERVICE:${GITHUB_REF_NAME}"
+          echo "WEB_IMAGE=$IMAGE" >> "$GITHUB_ENV"
           BUILD_ID="$(gcloud builds submit \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --tag "$IMAGE" \
@@ -75,40 +137,28 @@ jobs:
             --format='value(id)' \
             .)"
           echo "Cloud Build ID: $BUILD_ID"
-          echo "Cloud Build logs: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=${{ secrets.GCP_PROJECT_ID }}"
-
           for attempt in $(seq 1 120); do
-            STATUS="$(gcloud builds describe "$BUILD_ID" \
-              --project "${{ secrets.GCP_PROJECT_ID }}" \
-              --format='value(status)')"
+            STATUS="$(gcloud builds describe "$BUILD_ID" --project "${{ secrets.GCP_PROJECT_ID }}" --format='value(status)')"
             echo "Cloud Build status: $STATUS"
-
             case "$STATUS" in
-              SUCCESS)
-                exit 0
-                ;;
-              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
-                exit 1
-                ;;
+              SUCCESS) exit 0 ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED) exit 1 ;;
             esac
-
             sleep 5
           done
-
-          echo "Cloud Build did not finish within the expected time."
           exit 1
 
-      - name: Deploy to Cloud Run
+      - name: Deploy web service
         run: |
-          ENV_VARS="APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }}"
+          ENV_VARS="APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }},FORECAST_PREVIEW_ENABLED=${{ vars.FORECAST_PREVIEW_ENABLED }},FORECAST_SERVICE_URL=${{ needs.deploy-forecast.outputs.forecast_url }}"
           if [ -n "${{ secrets.ALLOWED_EMAIL }}" ]; then
             ENV_VARS="$ENV_VARS,ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}"
           fi
 
-          gcloud run deploy "$SERVICE" \
+          gcloud run deploy "$WEB_SERVICE" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
             --region "$REGION" \
-            --image "$IMAGE" \
+            --image "$WEB_IMAGE" \
             --allow-unauthenticated \
             --min-instances 0 \
             --max-instances 1 \

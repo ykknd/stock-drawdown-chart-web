@@ -7,3 +7,8 @@ github_repo  = "drawdown-chart"
 
 # Optional. Defaults to <project_id>-stock-drawdown-cache.
 # cache_bucket_name = "your-globally-unique-cache-bucket"
+
+# Optional forecast service overrides.
+# forecast_artifact_repository_id = "stock-drawdown-forecast"
+# forecast_service_name = "stock-drawdown-forecast-api"
+# forecast_min_instances = 0

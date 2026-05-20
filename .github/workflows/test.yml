@@ -32,7 +32,7 @@ jobs:
         run: uv run pytest
 
       - name: Compile backend
-        run: uv run python -m py_compile stock_drawdown_app.py
+        run: uv run python -m py_compile stock_drawdown_app.py forecast_service.py
 
       - name: Check frontend syntax
         run: node --check static/app.js

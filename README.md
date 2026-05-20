@@ -215,8 +215,28 @@ Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> 
 - `MARKET_DATA_CACHE_BACKEND`: `gcs`
 - `MARKET_DATA_CACHE_GCS_BUCKET`: `terraform output -raw cache_bucket_name`
 - `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+- `FORECAST_PREVIEW_ENABLED`: `true` after the forecast service is deployed
 
 For public hosting, do not set `JQUANTS_API_KEY` on Cloud Run. Users should provide their own J-Quants API key in the web UI.
+
+## Drawdown Forecasting Preview
+
+`時系列予測(preview)` is an optional daily-only feature backed by a separate private Cloud Run service. The web service keeps its lightweight runtime and calls the forecast service only when the user enables the preview and presses update.
+
+- Web service: keeps the existing `512Mi` runtime.
+- Forecast service: uses a separate Artifact Registry repository and a `2Gi` Cloud Run service because TimesFM inference is materially heavier.
+- Daily raw history is fetched independently of the visible chart period:
+  - J-Quants free tier: 2 years ending at the latest available free-tier date.
+  - J-Quants paid tier and yfinance: 5 years.
+- The forecast service is private. The web runtime service account invokes it with Cloud Run service-to-service authentication.
+
+Terraform outputs the private service URL:
+
+```powershell
+terraform output -raw forecast_service_url
+```
+
+Forecast minimum instances default to `0`. If cold starts become unacceptable, raise `forecast_min_instances` in `infra/gcp/terraform.tfvars` and re-apply Terraform.
 
 ### Release flow
 

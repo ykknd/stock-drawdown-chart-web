@@ -3,6 +3,11 @@ output "artifact_repository" {
   value       = google_artifact_registry_repository.docker.repository_id
 }
 
+output "forecast_artifact_repository" {
+  description = "Artifact Registry repository ID for forecast images."
+  value       = google_artifact_registry_repository.forecast_docker.repository_id
+}
+
 output "cache_bucket_name" {
   description = "Cloud Storage bucket name for market data cache."
   value       = google_storage_bucket.market_data_cache.name
@@ -16,6 +21,16 @@ output "deploy_service_account_email" {
 output "runtime_service_account_email" {
   description = "Cloud Run runtime service account email."
   value       = google_service_account.runtime.email
+}
+
+output "forecast_runtime_service_account_email" {
+  description = "Forecast Cloud Run runtime service account email."
+  value       = google_service_account.forecast_runtime.email
+}
+
+output "forecast_service_url" {
+  description = "Private forecast Cloud Run service URL."
+  value       = google_cloud_run_v2_service.forecast.uri
 }
 
 output "workload_identity_provider" {

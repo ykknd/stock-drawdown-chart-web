@@ -6,12 +6,16 @@ This directory provisions the Google Cloud resources required for tag-based Clou
 
 - Required Google Cloud APIs
 - Artifact Registry Docker repository
+- Separate Artifact Registry Docker repository for forecast images
 - Cloud Storage bucket for market data cache
 - 1-day cache object lifecycle rule
 - GitHub Actions deploy service account
 - Cloud Run runtime service account
+- Forecast Cloud Run runtime service account
+- Private forecast Cloud Run service for TimesFM inference
 - Workload Identity Pool and Provider for GitHub Actions OIDC
 - IAM bindings for deployment and runtime cache access
+- IAM binding that lets the web runtime service account invoke the private forecast service
 - IAM bindings for the Cloud Build default service account to read submitted source archives, write build logs, and push images
 - IAM binding that lets the GitHub Actions deploy service account act as the Cloud Build default service account
 
@@ -88,6 +92,15 @@ Add these repository variables:
 - `MARKET_DATA_CACHE_BACKEND`: `gcs`
 - `MARKET_DATA_CACHE_GCS_BUCKET`: `terraform output -raw cache_bucket_name`
 - `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+- `FORECAST_PREVIEW_ENABLED`: `true` after the forecast service is ready for use
+
+Additional useful Terraform outputs:
+
+- `forecast_artifact_repository`
+- `forecast_runtime_service_account_email`
+- `forecast_service_url`
+
+The forecast service defaults to `min instances = 0`, `max instances = 1`, and `2Gi` memory. If cold starts become a product issue, set `forecast_min_instances = 1` in `terraform.tfvars` and re-apply Terraform.
 
 Do not set `JQUANTS_API_KEY` on public Cloud Run hosting. Users should enter their own key in the web UI.
 

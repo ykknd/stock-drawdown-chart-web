@@ -8,6 +8,7 @@ const CANDLE_INTERVAL_STORAGE_KEY = "drawdown-board-candle-interval";
 const DD_RANGE_STORAGE_KEY = "drawdown-board-dd-range";
 const X_ZOOM_STORAGE_KEY = "drawdown-board-x-zoom";
 const TECHNICAL_INDICATORS_STORAGE_KEY = "drawdown-board-technical-indicators";
+const FORECAST_PREVIEW_STORAGE_KEY = "drawdown-board-forecast-preview";
 const AFFILIATE_ADS = [
   {
     label: "広告 / PR",
@@ -326,6 +327,33 @@ function buildFixedRangeTopFillPath(points, valueOf, min, max, area, xDomain = n
   return [`M ${firstX.toFixed(2)} ${topY.toFixed(2)}`, ...curve, `L ${lastX.toFixed(2)} ${topY.toFixed(2)}`, "Z"].join(" ");
 }
 
+function buildForecastBandPath(points, min, max, area, xDomain) {
+  if (!points.length) return "";
+  const lowerPath = points
+    .map((point) => {
+      const x = xForDate(point.date, xDomain, area);
+      if (x === null) return "";
+      return `L ${x.toFixed(2)} ${yForValue(Math.max(point.lower, min), min, max, area).toFixed(2)}`;
+    })
+    .filter(Boolean);
+  const upperPath = [...points]
+    .reverse()
+    .map((point) => {
+      const x = xForDate(point.date, xDomain, area);
+      if (x === null) return "";
+      return `L ${x.toFixed(2)} ${yForValue(Math.min(point.upper, max), min, max, area).toFixed(2)}`;
+    })
+    .filter(Boolean);
+  const firstX = xForDate(points[0].date, xDomain, area);
+  if (firstX === null) return "";
+  return [
+    `M ${firstX.toFixed(2)} ${yForValue(Math.max(points[0].lower, min), min, max, area).toFixed(2)}`,
+    ...lowerPath.slice(1),
+    ...upperPath,
+    "Z",
+  ].join(" ");
+}
+
 function candleWidth(count, area) {
   const slot = (area.right - area.left) / Math.max(count, 1);
   return Math.max(2, Math.min(slot * 0.62, 16));
@@ -577,10 +605,14 @@ function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators, dat
   const [hoverIndex, setHoverIndex] = useState(null);
   const [hoveredEvent, setHoveredEvent] = useState(null);
   const data = result.data || [];
+  const forecastPoints = result.forecast?.status === "ok" ? result.forecast.points || [] : [];
   if (!data.length) {
     return h("div", { className: "empty-chart" }, "データなし");
   }
-  const xDomain = visibleDateRange(dateRange, 100) || { start: data[0].date, end: data[data.length - 1].date };
+  const baseDomain = visibleDateRange(dateRange, 100) || { start: data[0].date, end: data[data.length - 1].date };
+  const xDomain = forecastPoints.length
+    ? { start: baseDomain.start, end: forecastPoints[forecastPoints.length - 1].date }
+    : baseDomain;
 
   const indicatorKeys = indicatorSeriesKeys(technicalIndicators);
   const indicatorValues = data.flatMap((point) =>
@@ -596,6 +628,8 @@ function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators, dat
   const xTickDates = dateTicksForDomain(xDomain, 6);
   const missingDataWindows = missingDataRects(data, xDomain, area);
   const drawdownFillPath = buildFixedRangeTopFillPath(data, (point) => point.drawdown, -ddRange / 100, 0, area, xDomain);
+  const forecastPath = buildFixedRangePath(forecastPoints, (point) => point.mean, -ddRange / 100, 0, area, xDomain);
+  const forecastBandPath = buildForecastBandPath(forecastPoints, -ddRange / 100, 0, area, xDomain);
   const bodyWidth = candleWidth(data.length, area);
   const latest = data[data.length - 1];
   const first = data[0];
@@ -670,6 +704,8 @@ function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators, dat
         );
       }),
       h("path", { d: drawdownFillPath, className: "drawdown-fill" }),
+      forecastBandPath ? h("path", { d: forecastBandPath, className: "forecast-band" }) : null,
+      forecastPath ? h("path", { d: forecastPath, className: "forecast-line" }) : null,
       data.map((point, index) => {
         const x = xForDate(point.date, xDomain, area);
         if (x === null) return null;
@@ -809,6 +845,15 @@ function ResultCard({ result, ddRange, marketEvents, technicalIndicators, dateRa
             )
           ),
           h(DrawdownChart, { key: "chart", result, ddRange, marketEvents, technicalIndicators, dateRange }),
+          result.forecast
+            ? h(
+                "div",
+                { key: "forecast", className: `forecast-note is-${result.forecast.status}` },
+                result.forecast.status === "ok"
+                  ? "時系列予測はpreviewです。投資判断を推奨するものではありません。"
+                  : result.forecast.message || "時系列予測を表示できません。"
+              )
+            : null,
         ]
   );
 }
@@ -1017,6 +1062,7 @@ function App() {
   const [technicalIndicators, setTechnicalIndicators] = useState(() =>
     parseStoredIndicators(localStorage.getItem(TECHNICAL_INDICATORS_STORAGE_KEY))
   );
+  const [forecastPreview, setForecastPreview] = useState(() => localStorage.getItem(FORECAST_PREVIEW_STORAGE_KEY) === "true");
   const [results, setResults] = useState([]);
   const [dateRange, setDateRange] = useState(null);
   const [marketEvents, setMarketEvents] = useState([]);
@@ -1029,6 +1075,7 @@ function App() {
     requires_jquants_api_key_input: false,
     market_data_cache_backend: "memory",
     market_data_cache_daily_enabled: true,
+    forecast_preview_enabled: false,
   });
   const [jquantsApiKey, setJquantsApiKey] = useState("");
   const [jquantsFreeTier, setJquantsFreeTier] = useState(() => {
@@ -1069,7 +1116,8 @@ function App() {
     nextCandleInterval = candleInterval,
     nextTechnicalIndicators = technicalIndicators,
     nextJQuantsFreeTier = jquantsFreeTier,
-    nextCustomMonths = customMonths
+    nextCustomMonths = customMonths,
+    nextForecastPreview = forecastPreview
   ) {
     if (!nextSymbols.length) return;
     if (appConfig.enabled && !authToken) return;
@@ -1094,6 +1142,7 @@ function App() {
           custom_months: nextPeriod === "custom" ? nextCustomMonths : null,
           candle_interval: nextCandleInterval,
           technical_indicators: nextTechnicalIndicators,
+          forecast_preview: nextForecastPreview && nextCandleInterval === "daily" && appConfig.forecast_preview_enabled,
           jquants_api_key: jquantsApiKey || null,
           jquants_free_tier: nextJQuantsFreeTier,
         }),
@@ -1137,6 +1186,7 @@ function App() {
           requires_jquants_api_key_input: Boolean(payload.requires_jquants_api_key_input),
           market_data_cache_backend: payload.market_data_cache_backend || "memory",
           market_data_cache_daily_enabled: payload.market_data_cache_daily_enabled !== false,
+          forecast_preview_enabled: Boolean(payload.forecast_preview_enabled),
         })
       )
       .catch(() =>
@@ -1149,6 +1199,7 @@ function App() {
           requires_jquants_api_key_input: false,
           market_data_cache_backend: "memory",
           market_data_cache_daily_enabled: true,
+          forecast_preview_enabled: false,
         })
       );
   }, []);
@@ -1307,6 +1358,13 @@ function App() {
     });
   }
 
+  function onForecastPreviewChange(event) {
+    const checked = event.target.checked;
+    setForecastPreview(checked);
+    localStorage.setItem(FORECAST_PREVIEW_STORAGE_KEY, String(checked));
+    setDirty(true);
+  }
+
   function onJQuantsFreeTierChange(event) {
     const nextFreeTier = event.target.checked;
     setJquantsFreeTier(nextFreeTier);
@@ -1321,7 +1379,7 @@ function App() {
 
   function onSubmit(event) {
     event.preventDefault();
-    fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, jquantsFreeTier, customMonths);
+    fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, jquantsFreeTier, customMonths, forecastPreview);
   }
 
   if (!appConfig.loaded) {
@@ -1572,6 +1630,25 @@ function App() {
                     })
                   );
                 })
+                ,
+                appConfig.forecast_preview_enabled
+                  ? h(
+                      "div",
+                      { className: "indicator-option forecast-preview-option" },
+                      h(
+                        "label",
+                        null,
+                        h("input", {
+                          type: "checkbox",
+                          checked: forecastPreview,
+                          disabled: candleInterval !== "daily",
+                          onChange: onForecastPreviewChange,
+                        }),
+                        h("span", null, "時系列予測(preview)")
+                      ),
+                      candleInterval !== "daily" ? h("small", null, "日足のみ") : null
+                    )
+                  : null
               )
             )
           )

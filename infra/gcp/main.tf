@@ -105,6 +105,28 @@ resource "google_project_iam_member" "deploy_project_roles" {
   member  = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_service_account" "forecast_runtime" {
+  project      = var.project_id
+  account_id   = var.forecast_runtime_service_account_id
+  display_name = "Stock Drawdown forecast Cloud Run runtime"
+
+  depends_on = [
+    google_project_service.required["iam.googleapis.com"],
+  ]
+}
+
+resource "google_artifact_registry_repository" "forecast_docker" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = var.forecast_artifact_repository_id
+  description   = "Drawdown forecast Cloud Run images"
+  format        = "DOCKER"
+
+  depends_on = [
+    google_project_service.required["artifactregistry.googleapis.com"],
+  ]
+}
+
 resource "google_project_iam_member" "cloud_build_project_roles" {
   for_each = local.cloud_build_project_roles
 
@@ -119,6 +141,12 @@ resource "google_service_account_iam_member" "deploy_can_use_runtime" {
   member             = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_service_account_iam_member" "deploy_can_use_forecast_runtime" {
+  service_account_id = google_service_account.forecast_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deploy.email}"
+}
+
 resource "google_service_account_iam_member" "deploy_can_use_cloud_build_default" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${local.cloud_build_default_service_account}"
   role               = "roles/iam.serviceAccountUser"
@@ -129,6 +157,52 @@ resource "google_storage_bucket_iam_member" "runtime_cache_object_admin" {
   bucket = google_storage_bucket.market_data_cache.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_cloud_run_v2_service" "forecast" {
+  project             = var.project_id
+  location            = var.region
+  name                = var.forecast_service_name
+  deletion_protection = false
+  ingress             = "INGRESS_TRAFFIC_ALL"
+
+  template {
+    service_account = google_service_account.forecast_runtime.email
+
+    scaling {
+      min_instance_count = var.forecast_min_instances
+      max_instance_count = var.forecast_max_instances
+    }
+
+    containers {
+      image = var.forecast_bootstrap_image
+
+      resources {
+        limits = {
+          cpu    = var.forecast_cpu
+          memory = var.forecast_memory
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required["run.googleapis.com"],
+  ]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "web_runtime_can_invoke_forecast" {
+  project  = google_cloud_run_v2_service.forecast.project
+  location = google_cloud_run_v2_service.forecast.location
+  name     = google_cloud_run_v2_service.forecast.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
 }
 
 resource "google_iam_workload_identity_pool" "github" {
