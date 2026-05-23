@@ -9,6 +9,17 @@ variable "region" {
   default     = "asia-northeast1"
 }
 
+variable "environment" {
+  description = "Deployment environment name. Use staging or production."
+  type        = string
+  default     = "production"
+
+  validation {
+    condition     = contains(["staging", "production"], var.environment)
+    error_message = "environment must be either staging or production."
+  }
+}
+
 variable "github_owner" {
   description = "GitHub repository owner or organization."
   type        = string
@@ -20,15 +31,15 @@ variable "github_repo" {
 }
 
 variable "artifact_repository_id" {
-  description = "Artifact Registry Docker repository ID."
+  description = "Artifact Registry Docker repository ID. Defaults to an environment-aware standard name."
   type        = string
-  default     = "stock-drawdown"
+  default     = null
 }
 
 variable "forecast_artifact_repository_id" {
-  description = "Artifact Registry Docker repository ID for forecast images."
+  description = "Artifact Registry Docker repository ID for forecast images. Defaults to an environment-aware standard name."
   type        = string
-  default     = "stock-drawdown-forecast"
+  default     = null
 }
 
 variable "cache_bucket_name" {
@@ -62,27 +73,33 @@ variable "workload_identity_provider_id" {
 }
 
 variable "deploy_service_account_id" {
-  description = "Service account ID used by GitHub Actions deployments."
+  description = "Service account ID used by GitHub Actions deployments. Defaults to an environment-aware standard name."
   type        = string
-  default     = "github-actions-deploy"
+  default     = null
+}
+
+variable "cloud_build_service_account_id" {
+  description = "Service account ID used by Cloud Build builds. Defaults to an environment-aware standard name."
+  type        = string
+  default     = null
 }
 
 variable "runtime_service_account_id" {
-  description = "Service account ID used by the Cloud Run runtime."
+  description = "Service account ID used by the Cloud Run runtime. Defaults to an environment-aware standard name."
   type        = string
-  default     = "stock-drawdown-runtime"
+  default     = null
 }
 
 variable "forecast_runtime_service_account_id" {
-  description = "Service account ID used by the forecast Cloud Run runtime."
+  description = "Service account ID used by the forecast Cloud Run runtime. Defaults to an environment-aware standard name."
   type        = string
-  default     = "stock-drawdown-forecast-runtime"
+  default     = null
 }
 
 variable "forecast_service_name" {
-  description = "Cloud Run service name for TimesFM inference."
+  description = "Cloud Run service name for TimesFM inference. Defaults to an environment-aware standard name."
   type        = string
-  default     = "stock-drawdown-forecast-api"
+  default     = null
 }
 
 variable "forecast_bootstrap_image" {
@@ -94,7 +111,7 @@ variable "forecast_bootstrap_image" {
 variable "forecast_memory" {
   description = "Memory limit for the forecast Cloud Run service."
   type        = string
-  default     = "2Gi"
+  default     = null
 }
 
 variable "forecast_cpu" {

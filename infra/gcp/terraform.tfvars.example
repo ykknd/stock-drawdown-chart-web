@@ -2,13 +2,19 @@ project_id   = "your-gcp-project-id"
 github_owner = "your-github-owner"
 github_repo  = "drawdown-chart"
 
+# Use "staging" for the test project and "production" for the live project.
+# Production keeps the historical unsuffixed names. Staging appends "-staging".
+environment = "staging"
+
 # Optional. Defaults to asia-northeast1.
 # region = "asia-northeast1"
 
-# Optional. Defaults to <project_id>-stock-drawdown-cache.
+# Optional. Defaults to <project_id>-stock-drawdown-cache for production,
+# or <project_id>-stock-drawdown-cache-staging for staging.
 # cache_bucket_name = "your-globally-unique-cache-bucket"
 
 # Optional forecast service overrides.
-# forecast_artifact_repository_id = "stock-drawdown-forecast"
-# forecast_service_name = "stock-drawdown-forecast-api"
+# forecast_artifact_repository_id = "stock-drawdown-forecast-staging"
+# forecast_service_name = "stock-drawdown-forecast-api-staging"
 # forecast_min_instances = 0
+# forecast_memory = "4Gi"

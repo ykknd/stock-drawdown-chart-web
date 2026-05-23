@@ -4,20 +4,39 @@ on:
   push:
     tags:
       - "v*"
+      - "stg-v*"
 
 permissions:
   contents: read
   id-token: write
 
-env:
-  WEB_SERVICE: stock-drawdown-chart-web
-  FORECAST_SERVICE: stock-drawdown-forecast-api
-  REGION: asia-northeast1
-  WEB_ARTIFACT_REPOSITORY: stock-drawdown
-  FORECAST_ARTIFACT_REPOSITORY: stock-drawdown-forecast
-
 jobs:
+  resolve_environment:
+    runs-on: ubuntu-latest
+    outputs:
+      target_environment: ${{ steps.resolve.outputs.target_environment }}
+      is_production: ${{ steps.resolve.outputs.is_production }}
+    steps:
+      - name: Resolve deployment environment from tag
+        id: resolve
+        run: |
+          case "$GITHUB_REF_NAME" in
+            stg-v*)
+              echo "target_environment=staging" >> "$GITHUB_OUTPUT"
+              echo "is_production=false" >> "$GITHUB_OUTPUT"
+              ;;
+            v*)
+              echo "target_environment=production" >> "$GITHUB_OUTPUT"
+              echo "is_production=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported deployment tag: $GITHUB_REF_NAME" >&2
+              exit 1
+              ;;
+          esac
+
   verify:
+    needs: resolve_environment
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,6 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Ensure tag is on main
+        if: needs.resolve_environment.outputs.is_production == 'true'
         run: |
           git fetch origin main
           TAG_COMMIT="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
@@ -46,8 +66,14 @@ jobs:
         run: uv run pytest
 
   deploy-forecast:
-    needs: verify
+    needs:
+      - resolve_environment
+      - verify
     runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_environment.outputs.target_environment }}
+    concurrency:
+      group: deploy-${{ needs.resolve_environment.outputs.target_environment }}
+      cancel-in-progress: false
     outputs:
       forecast_url: ${{ steps.forecast-url.outputs.url }}
     steps:
@@ -65,10 +91,11 @@ jobs:
 
       - name: Build forecast container
         run: |
-          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$FORECAST_ARTIFACT_REPOSITORY/$FORECAST_SERVICE:${GITHUB_REF_NAME}"
+          IMAGE="${{ vars.REGION || 'asia-northeast1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.FORECAST_ARTIFACT_REPOSITORY }}/${{ vars.FORECAST_SERVICE }}:${GITHUB_REF_NAME}"
           echo "FORECAST_IMAGE=$IMAGE" >> "$GITHUB_ENV"
           BUILD_ID="$(gcloud builds submit \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --service-account "projects/${{ secrets.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.CLOUD_BUILD_SERVICE_ACCOUNT }}" \
             --config cloudbuild.forecast.yaml \
             --substitutions "_IMAGE=$IMAGE" \
             --async \
@@ -88,31 +115,36 @@ jobs:
 
       - name: Deploy forecast service
         run: |
-          gcloud run deploy "$FORECAST_SERVICE" \
+          gcloud run deploy "${{ vars.FORECAST_SERVICE }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --region "$REGION" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
             --image "$FORECAST_IMAGE" \
             --no-allow-unauthenticated \
-            --min-instances 0 \
-            --max-instances 1 \
-            --memory 2Gi \
-            --cpu 1 \
-            --service-account "stock-drawdown-forecast-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+            --min-instances "${{ vars.FORECAST_MIN_INSTANCES || '0' }}" \
+            --max-instances "${{ vars.FORECAST_MAX_INSTANCES || '1' }}" \
+            --memory "${{ vars.FORECAST_MEMORY || '2Gi' }}" \
+            --cpu "${{ vars.FORECAST_CPU || '1' }}" \
+            --service-account "${{ vars.FORECAST_RUNTIME_SERVICE_ACCOUNT }}"
 
       - name: Read forecast service URL
         id: forecast-url
         run: |
-          URL="$(gcloud run services describe "$FORECAST_SERVICE" \
+          URL="$(gcloud run services describe "${{ vars.FORECAST_SERVICE }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --region "$REGION" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
             --format='value(status.url)')"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
   deploy-web:
     needs:
+      - resolve_environment
       - verify
       - deploy-forecast
     runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_environment.outputs.target_environment }}
+    concurrency:
+      group: deploy-${{ needs.resolve_environment.outputs.target_environment }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -128,11 +160,13 @@ jobs:
 
       - name: Build web container
         run: |
-          IMAGE="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$WEB_ARTIFACT_REPOSITORY/$WEB_SERVICE:${GITHUB_REF_NAME}"
+          IMAGE="${{ vars.REGION || 'asia-northeast1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.WEB_ARTIFACT_REPOSITORY }}/${{ vars.WEB_SERVICE }}:${GITHUB_REF_NAME}"
           echo "WEB_IMAGE=$IMAGE" >> "$GITHUB_ENV"
           BUILD_ID="$(gcloud builds submit \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --tag "$IMAGE" \
+            --service-account "projects/${{ secrets.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.CLOUD_BUILD_SERVICE_ACCOUNT }}" \
+            --config cloudbuild.web.yaml \
+            --substitutions "_IMAGE=$IMAGE" \
             --async \
             --format='value(id)' \
             .)"
@@ -155,14 +189,14 @@ jobs:
             ENV_VARS="$ENV_VARS,ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}"
           fi
 
-          gcloud run deploy "$WEB_SERVICE" \
+          gcloud run deploy "${{ vars.WEB_SERVICE }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
-            --region "$REGION" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
             --image "$WEB_IMAGE" \
             --allow-unauthenticated \
-            --min-instances 0 \
-            --max-instances 1 \
-            --memory 512Mi \
-            --cpu 1 \
-            --service-account "stock-drawdown-runtime@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --min-instances "${{ vars.WEB_MIN_INSTANCES || '0' }}" \
+            --max-instances "${{ vars.WEB_MAX_INSTANCES || '1' }}" \
+            --memory "${{ vars.WEB_MEMORY || '512Mi' }}" \
+            --cpu "${{ vars.WEB_CPU || '1' }}" \
+            --service-account "${{ vars.WEB_RUNTIME_SERVICE_ACCOUNT }}" \
             --set-env-vars "$ENV_VARS"

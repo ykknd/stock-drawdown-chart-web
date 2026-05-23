@@ -3,6 +3,11 @@ output "artifact_repository" {
   value       = google_artifact_registry_repository.docker.repository_id
 }
 
+output "environment" {
+  description = "Deployment environment for this Terraform state."
+  value       = local.environment
+}
+
 output "forecast_artifact_repository" {
   description = "Artifact Registry repository ID for forecast images."
   value       = google_artifact_registry_repository.forecast_docker.repository_id
@@ -18,6 +23,11 @@ output "deploy_service_account_email" {
   value       = google_service_account.deploy.email
 }
 
+output "cloud_build_service_account_email" {
+  description = "Cloud Build service account email. Use as CLOUD_BUILD_SERVICE_ACCOUNT."
+  value       = google_service_account.cloud_build.email
+}
+
 output "runtime_service_account_email" {
   description = "Cloud Run runtime service account email."
   value       = google_service_account.runtime.email
@@ -31,6 +41,16 @@ output "forecast_runtime_service_account_email" {
 output "forecast_service_url" {
   description = "Private forecast Cloud Run service URL."
   value       = google_cloud_run_v2_service.forecast.uri
+}
+
+output "forecast_service_name" {
+  description = "Forecast Cloud Run service name."
+  value       = google_cloud_run_v2_service.forecast.name
+}
+
+output "web_service_name" {
+  description = "Recommended web Cloud Run service name for GitHub Environment variables."
+  value       = "stock-drawdown-chart-web${local.environment_suffix}"
 }
 
 output "workload_identity_provider" {
