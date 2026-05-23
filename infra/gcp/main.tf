@@ -10,7 +10,7 @@ locals {
   runtime_service_account_id      = coalesce(var.runtime_service_account_id, "stock-drawdown-runtime${local.environment_suffix}")
   forecast_runtime_service_account_id = coalesce(
     var.forecast_runtime_service_account_id,
-    local.environment == "production" ? "stock-drawdown-forecast-runtime" : "stock-dd-forecast-rt${local.environment_suffix}"
+    "stock-dd-forecast-rt${local.environment_suffix}"
   )
   forecast_service_name        = coalesce(var.forecast_service_name, "stock-drawdown-forecast-api${local.environment_suffix}")
   forecast_memory              = coalesce(var.forecast_memory, local.environment == "staging" ? "4Gi" : "2Gi")

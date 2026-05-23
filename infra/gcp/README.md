@@ -56,7 +56,7 @@ Required values:
 - production: `<project_id>-stock-drawdown-cache`
 - staging: `<project_id>-stock-drawdown-cache-staging`
 
-Production keeps the historical unsuffixed names where they already fit Google Cloud naming limits. Staging appends `-staging` to standard service accounts, Artifact Registry repositories, and Cloud Run service names. The staging forecast runtime service account uses the shorter default `stock-dd-forecast-rt-staging` so it stays within Google Cloud's service account ID length limit.
+Production keeps the historical unsuffixed names where they already fit Google Cloud naming limits. Staging appends `-staging` to standard service accounts, Artifact Registry repositories, and Cloud Run service names. The forecast runtime service account uses the shorter default `stock-dd-forecast-rt` / `stock-dd-forecast-rt-staging` so it stays within Google Cloud's service account ID length limit.
 
 The Workload Identity Provider is also environment-scoped:
 
