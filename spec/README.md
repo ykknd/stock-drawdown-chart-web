@@ -38,6 +38,7 @@
 - [Manual Refresh Market Cache](./manual-refresh-market-cache/requirements.md)
 - [Security Name Selector](./security-name-selector/requirements.md)
 - [Google Login Public Access](./google-login-public-access/requirements.md)
+- [Drawdown Forecasting](./drawdown-forecasting/requirements.md)
 
 ## Workflow
 

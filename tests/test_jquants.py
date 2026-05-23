@@ -70,10 +70,11 @@ def test_jquants_free_data_lag_weeks(monkeypatch):
     monkeypatch.setenv("JQUANTS_FREE_DATA_LAG_WEEKS", "invalid")
     assert jquants_free_data_lag_weeks() == 12
 
-def test_jquants_start_date_uses_requested_period_not_lagged_end():
+def test_jquants_start_date_uses_lagged_end_for_free_tier_history():
     provider = JQuantsMarketDataProvider()
-    start_date = provider._get_start_date("1y", None)
-    assert start_date == __import__("datetime").date.today().replace(year=__import__("datetime").date.today().year - 1)
+    end_date = provider._get_end_date(free_tier=True)
+    start_date = provider._get_start_date("1y", None, end_date=end_date)
+    assert start_date == end_date.replace(year=end_date.year - 1)
 
 def test_normalize_date_value_accepts_jquants_datetime_string():
     assert normalize_date_value("2025-07-01 00:00:00") == "2025-07-01"
@@ -108,11 +109,8 @@ def test_jquants_free_tier_logic(monkeypatch):
     # free_tier = False
     assert provider._get_end_date(free_tier=False) == today
 
-    # from >= to error
-    # period="1mo" start is today - 1 month. end for free tier is today - 12 weeks (~3 months).
-    # 1 month ago is LATER than 3 months ago. so start > end.
-    with pytest.raises(ValueError, match="J-Quants無料枠ではこの期間に取得可能なデータがありません"):
-        provider.get_adjusted_close("7203", period="1mo", jquants_free_tier=True)
+    # Free-tier history is anchored to the lagged end date, so short periods remain valid.
+    assert provider._get_start_date("1mo", None, end_date=provider._get_end_date(True)) < provider._get_end_date(True)
 
 def test_cache_separation_by_free_tier(monkeypatch):
     class CountingMockProvider:

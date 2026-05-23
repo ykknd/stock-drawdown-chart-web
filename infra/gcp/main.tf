@@ -1,6 +1,21 @@
 locals {
-  cache_bucket_name = coalesce(var.cache_bucket_name, "${var.project_id}-stock-drawdown-cache")
-  github_repository = "${var.github_owner}/${var.github_repo}"
+  environment        = lower(var.environment)
+  environment_suffix = local.environment == "production" ? "" : "-${local.environment}"
+
+  artifact_repository_id          = coalesce(var.artifact_repository_id, "stock-drawdown${local.environment_suffix}")
+  forecast_artifact_repository_id = coalesce(var.forecast_artifact_repository_id, "stock-drawdown-forecast${local.environment_suffix}")
+  cache_bucket_name               = coalesce(var.cache_bucket_name, "${var.project_id}-stock-drawdown-cache${local.environment_suffix}")
+  deploy_service_account_id       = coalesce(var.deploy_service_account_id, "github-actions-deploy${local.environment_suffix}")
+  cloud_build_service_account_id  = coalesce(var.cloud_build_service_account_id, "stock-drawdown-build${local.environment_suffix}")
+  runtime_service_account_id      = coalesce(var.runtime_service_account_id, "stock-drawdown-runtime${local.environment_suffix}")
+  forecast_runtime_service_account_id = coalesce(
+    var.forecast_runtime_service_account_id,
+    local.environment == "production" ? "stock-drawdown-forecast-runtime" : "stock-dd-forecast-rt${local.environment_suffix}"
+  )
+  forecast_service_name        = coalesce(var.forecast_service_name, "stock-drawdown-forecast-api${local.environment_suffix}")
+  forecast_memory              = coalesce(var.forecast_memory, local.environment == "staging" ? "4Gi" : "2Gi")
+  github_repository            = "${var.github_owner}/${var.github_repo}"
+  workload_identity_ref_prefix = local.environment == "staging" ? "refs/tags/stg-v" : "refs/tags/v"
 
   required_services = toset([
     "artifactregistry.googleapis.com",
@@ -21,8 +36,6 @@ locals {
     "roles/serviceusage.serviceUsageViewer",
     "roles/storage.admin",
   ])
-
-  cloud_build_default_service_account = "${data.google_project.current.number}-compute@developer.gserviceaccount.com"
 
   cloud_build_project_roles = toset([
     "roles/artifactregistry.writer",
@@ -46,7 +59,7 @@ resource "google_project_service" "required" {
 resource "google_artifact_registry_repository" "docker" {
   project       = var.project_id
   location      = var.region
-  repository_id = var.artifact_repository_id
+  repository_id = local.artifact_repository_id
   description   = "Drawdown Chart Cloud Run images"
   format        = "DOCKER"
 
@@ -79,8 +92,18 @@ resource "google_storage_bucket" "market_data_cache" {
 
 resource "google_service_account" "deploy" {
   project      = var.project_id
-  account_id   = var.deploy_service_account_id
+  account_id   = local.deploy_service_account_id
   display_name = "GitHub Actions Cloud Run deploy"
+
+  depends_on = [
+    google_project_service.required["iam.googleapis.com"],
+  ]
+}
+
+resource "google_service_account" "cloud_build" {
+  project      = var.project_id
+  account_id   = local.cloud_build_service_account_id
+  display_name = "Stock Drawdown Cloud Build"
 
   depends_on = [
     google_project_service.required["iam.googleapis.com"],
@@ -89,7 +112,7 @@ resource "google_service_account" "deploy" {
 
 resource "google_service_account" "runtime" {
   project      = var.project_id
-  account_id   = var.runtime_service_account_id
+  account_id   = local.runtime_service_account_id
   display_name = "Stock Drawdown Cloud Run runtime"
 
   depends_on = [
@@ -105,12 +128,34 @@ resource "google_project_iam_member" "deploy_project_roles" {
   member  = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_service_account" "forecast_runtime" {
+  project      = var.project_id
+  account_id   = local.forecast_runtime_service_account_id
+  display_name = "Stock Drawdown forecast Cloud Run runtime"
+
+  depends_on = [
+    google_project_service.required["iam.googleapis.com"],
+  ]
+}
+
+resource "google_artifact_registry_repository" "forecast_docker" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = local.forecast_artifact_repository_id
+  description   = "Drawdown forecast Cloud Run images"
+  format        = "DOCKER"
+
+  depends_on = [
+    google_project_service.required["artifactregistry.googleapis.com"],
+  ]
+}
+
 resource "google_project_iam_member" "cloud_build_project_roles" {
   for_each = local.cloud_build_project_roles
 
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${local.cloud_build_default_service_account}"
+  member  = "serviceAccount:${google_service_account.cloud_build.email}"
 }
 
 resource "google_service_account_iam_member" "deploy_can_use_runtime" {
@@ -119,8 +164,14 @@ resource "google_service_account_iam_member" "deploy_can_use_runtime" {
   member             = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_service_account_iam_member" "deploy_can_use_forecast_runtime" {
+  service_account_id = google_service_account.forecast_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deploy.email}"
+}
+
 resource "google_service_account_iam_member" "deploy_can_use_cloud_build_default" {
-  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.cloud_build_default_service_account}"
+  service_account_id = google_service_account.cloud_build.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deploy.email}"
 }
@@ -129,6 +180,52 @@ resource "google_storage_bucket_iam_member" "runtime_cache_object_admin" {
   bucket = google_storage_bucket.market_data_cache.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_cloud_run_v2_service" "forecast" {
+  project             = var.project_id
+  location            = var.region
+  name                = local.forecast_service_name
+  deletion_protection = false
+  ingress             = "INGRESS_TRAFFIC_ALL"
+
+  template {
+    service_account = google_service_account.forecast_runtime.email
+
+    scaling {
+      min_instance_count = var.forecast_min_instances
+      max_instance_count = var.forecast_max_instances
+    }
+
+    containers {
+      image = var.forecast_bootstrap_image
+
+      resources {
+        limits = {
+          cpu    = var.forecast_cpu
+          memory = local.forecast_memory
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required["run.googleapis.com"],
+  ]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "web_runtime_can_invoke_forecast" {
+  project  = google_cloud_run_v2_service.forecast.project
+  location = google_cloud_run_v2_service.forecast.location
+  name     = google_cloud_run_v2_service.forecast.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
 }
 
 resource "google_iam_workload_identity_pool" "github" {
@@ -157,7 +254,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.ref"        = "assertion.ref"
   }
 
-  attribute_condition = "assertion.repository == \"${local.github_repository}\""
+  attribute_condition = "assertion.repository == \"${local.github_repository}\" && assertion.ref.startsWith(\"${local.workload_identity_ref_prefix}\")"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

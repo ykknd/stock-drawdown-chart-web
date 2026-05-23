@@ -30,7 +30,12 @@ uv run uvicorn stock_drawdown_app:app --reload
 
 ## Cloud Run Deployment
 
-This repository is prepared for tag-based production deployment to Cloud Run from GitHub Actions.
+This repository is prepared for tag-based staging and production deployment to Cloud Run from GitHub Actions.
+
+- staging: `stg-vX.Y.Z-rc.N`
+- production: `vX.Y.Z`
+
+Staging and production should use separate Google Cloud projects and separate GitHub Environments.
 
 ### Local auth behavior
 
@@ -148,43 +153,75 @@ gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleap
 
 #### Provision infrastructure
 
-Terraform変数ファイルを作成します。
+Terraform変数ファイルとworkspaceは、staging / production で分けます。同じworkspaceで `staging.tfvars` と `production.tfvars` を切り替えないでください。
 
 ```powershell
-Copy-Item infra/gcp/terraform.tfvars.example infra/gcp/terraform.tfvars
+Copy-Item infra/gcp/terraform.tfvars.example infra/gcp/staging.tfvars
+Copy-Item infra/gcp/terraform.tfvars.example infra/gcp/production.tfvars
 ```
 
-`infra/gcp/terraform.tfvars` を編集します。
+`infra/gcp/staging.tfvars` の例:
 
 ```hcl
-project_id   = "your-gcp-project-id"
-github_owner = "your-github-owner"
-github_repo  = "drawdown-chart"
+project_id   = "stage-web-stock-drawdown"
+github_owner = "ykknd"
+github_repo  = "stock-drawdown-chart-web"
+environment  = "staging"
 ```
 
-インフラを作成します。
+`infra/gcp/production.tfvars` の例:
+
+```hcl
+project_id   = "<production-project-id>"
+github_owner = "ykknd"
+github_repo  = "stock-drawdown-chart-web"
+environment  = "production"
+```
+
+staging のインフラを作成します。
 
 ```powershell
 cd infra/gcp
 terraform init
-terraform plan
-terraform apply
+terraform workspace new staging
+terraform workspace select staging
+terraform plan -var-file="staging.tfvars"
+terraform apply -var-file="staging.tfvars"
 terraform output
 ```
+
+production のインフラを扱う場合は、production workspace と `production.tfvars` を使います。
+
+```powershell
+cd infra/gcp
+terraform init
+terraform workspace new production
+terraform workspace select production
+terraform plan -var-file="production.tfvars"
+terraform apply -var-file="production.tfvars"
+terraform output
+```
+
+既にworkspaceが存在する場合、`terraform workspace new <name>` は失敗します。その場合は `terraform workspace select <name>` のみ実行してください。
 
 Terraformは主に以下を作成します。
 
 - Required Google Cloud APIs
-- Artifact Registry repository: `stock-drawdown`
+- Artifact Registry repository
+- Forecast Artifact Registry repository
 - Cloud Storage cache bucket
 - cache objectの1日削除lifecycle rule
 - GitHub Actions deploy service account
-- Cloud Run runtime service account: `stock-drawdown-runtime`
+- Cloud Build build service account
+- Cloud Run runtime service account
+- Forecast runtime service account
+- Private Forecast Cloud Run service
 - Workload Identity Pool / Provider
 - GitHub Actions OIDC用IAM binding
 - Cloud Run runtime service accountのcache bucket read/write権限
-- Cloud Build default service accountのsource archive read、build log、Artifact Registry push権限
-- GitHub Actions deploy service accountがCloud Build default service accountをactAsする権限
+- Web runtime service accountからForecast serviceへのinvoke権限
+- Cloud Build service accountのsource archive read、build log、Artifact Registry push権限
+- GitHub Actions deploy service accountがCloud Build service accountをactAsする権限
 
 Cloud Run service本体は、release tag push時にGitHub Actionsが作成または更新します。
 
@@ -194,42 +231,94 @@ Cloud Run service本体は、release tag push時にGitHub Actionsが作成また
 
 Cloud Build作成後にログストリーミング権限で失敗する場合があるため、GitHub Actionsでは `gcloud builds submit --async` でbuildを作成し、`gcloud builds describe` でステータスをポーリングします。詳細ログはGitHub Actions出力に表示されるCloud Build URLから確認してください。
 
-### Required GitHub secrets
+### Required GitHub Environments
 
-Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> Repository secrets`.
+Create these in `GitHub repository Settings -> Environments`.
+
+- `staging`
+- `production`
+
+Add the following secrets and variables to each environment. Production should use an environment protection rule such as required reviewers.
+
+Environment secrets:
 
 - `GCP_PROJECT_ID`: your Google Cloud project ID
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `terraform output -raw workload_identity_provider`
 - `GCP_SERVICE_ACCOUNT`: `terraform output -raw deploy_service_account_email`
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID
 
-Optional repository secret:
+Optional environment secret:
 
 - `ALLOWED_EMAIL`: set only for private single-email access. Leave unset for public hosting where any verified Google account may use the app.
 
-### Required GitHub variables
+Environment variables:
 
-Add these in `GitHub repository Settings -> Secrets and variables -> Actions -> Variables`.
-
+- `REGION`: `asia-northeast1`
+- `WEB_SERVICE`: `terraform output -raw web_service_name`
+- `FORECAST_SERVICE`: `terraform output -raw forecast_service_name`
+- `WEB_ARTIFACT_REPOSITORY`: `terraform output -raw artifact_repository`
+- `FORECAST_ARTIFACT_REPOSITORY`: `terraform output -raw forecast_artifact_repository`
+- `CLOUD_BUILD_SERVICE_ACCOUNT`: `terraform output -raw cloud_build_service_account_email`
+- `WEB_RUNTIME_SERVICE_ACCOUNT`: `terraform output -raw runtime_service_account_email`
+- `FORECAST_RUNTIME_SERVICE_ACCOUNT`: `terraform output -raw forecast_runtime_service_account_email`
 - `MARKET_DATA_PROVIDER`: `jquants`
 - `MARKET_DATA_CACHE_BACKEND`: `gcs`
 - `MARKET_DATA_CACHE_GCS_BUCKET`: `terraform output -raw cache_bucket_name`
 - `MARKET_DATA_CACHE_GCS_PREFIX`: `market-data-cache`
+- `FORECAST_PREVIEW_ENABLED`: `true` after the forecast service is deployed
+
+Optional variables:
+
+- `WEB_MIN_INSTANCES`: defaults to `0`
+- `WEB_MAX_INSTANCES`: defaults to `1`
+- `WEB_MEMORY`: defaults to `512Mi`
+- `WEB_CPU`: defaults to `1`
+- `FORECAST_MIN_INSTANCES`: defaults to `0`
+- `FORECAST_MAX_INSTANCES`: defaults to `1`
+- `FORECAST_MEMORY`: defaults to `2Gi`; use `4Gi` for initial staging TimesFM tests
+- `FORECAST_CPU`: defaults to `1`
 
 For public hosting, do not set `JQUANTS_API_KEY` on Cloud Run. Users should provide their own J-Quants API key in the web UI.
 
+## Drawdown Forecasting Preview
+
+`時系列予測(preview)` is an optional daily-only feature backed by a separate private Cloud Run service. The web service keeps its lightweight runtime and calls the forecast service only when the user enables the preview and presses update.
+
+- Web service: keeps the existing `512Mi` runtime.
+- Forecast service: uses a separate Artifact Registry repository and a `2Gi` Cloud Run service because TimesFM inference is materially heavier.
+- Daily raw history is fetched independently of the visible chart period:
+  - J-Quants free tier: 2 years ending at the latest available free-tier date.
+  - J-Quants paid tier and yfinance: 5 years.
+- The forecast service is private. The web runtime service account invokes it with Cloud Run service-to-service authentication.
+
+Terraform outputs the private service URL:
+
+```powershell
+terraform output -raw forecast_service_url
+```
+
+Forecast minimum instances default to `0`. If cold starts become unacceptable, raise `forecast_min_instances` in `infra/gcp/terraform.tfvars` and re-apply Terraform.
+
 ### Release flow
 
-Development happens on `feat/host-gc`. Production deploys only from tags on `main`.
+Staging deploys from `stg-v*` tags and may point to any branch or commit.
+
+```powershell
+git checkout feat/timesfm
+git tag stg-v0.2.0-rc.1
+git push origin stg-v0.2.0-rc.1
+```
+
+Production deploys from `v*` tags only when the tag commit is included in `origin/main`.
 
 ```powershell
 git checkout main
 git pull origin main
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-The workflow verifies that the tag commit is included in `origin/main` before deploying.
+The workflow verifies that production tag commits are included in `origin/main` before deploying.
 
 ### Custom domain with an external DNS provider
 

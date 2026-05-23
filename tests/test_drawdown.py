@@ -3,6 +3,8 @@ from fastapi import HTTPException
 import pytest
 
 from stock_drawdown_app import (
+    ForecastPoint,
+    ForecastResult,
     PricePoint,
     TechnicalIndicatorSetting,
     adjusted_price_point,
@@ -11,6 +13,7 @@ from stock_drawdown_app import (
     calculate_recovery_metrics,
     calculate_technical_indicators,
     create_app,
+    history_fetch_period,
     load_market_events,
     normalize_japanese_symbol,
     subtract_months,
@@ -68,6 +71,35 @@ class CountingProvider(FakeProvider):
         return super().get_security_name(symbol, api_key=api_key)
 
 
+class LongHistoryProvider(FakeProvider):
+    def get_adjusted_close(
+        self,
+        symbol: str,
+        period: str,
+        custom_months: int | None = None,
+        api_key: str | None = None,
+        jquants_free_tier: bool = True,
+    ) -> list[PricePoint]:
+        start = __import__("datetime").date.today() - __import__("datetime").timedelta(days=320)
+        return [
+            PricePoint((start + __import__("datetime").timedelta(days=offset)).isoformat(), 100.0 + offset)
+            for offset in range(300)
+        ]
+
+
+class FakeForecastClient:
+    def predict_drawdown(self, latest_data_date: str, drawdown_depths: list[float], horizon_business_days: int) -> ForecastResult:
+        assert horizon_business_days == 14
+        assert len(drawdown_depths) >= 252
+        return ForecastResult(
+            status="ok",
+            latest_data_date=latest_data_date,
+            points=[
+                ForecastPoint(date="2026-05-19", mean=-0.1, lower=-0.15, upper=-0.05),
+            ],
+        )
+
+
 def test_normalize_japanese_symbol_adds_t_suffix() -> None:
     assert normalize_japanese_symbol("7203") == "7203.T"
     assert normalize_japanese_symbol("7203.T") == "7203.T"
@@ -76,6 +108,12 @@ def test_normalize_japanese_symbol_adds_t_suffix() -> None:
 
 def test_subtract_months_clamps_to_last_day() -> None:
     assert subtract_months(__import__("datetime").date(2026, 3, 31), 1).isoformat() == "2026-02-28"
+
+
+def test_history_fetch_period_uses_provider_specific_horizons() -> None:
+    assert history_fetch_period("jquants", True) == "2y"
+    assert history_fetch_period("jquants", False) == "5y"
+    assert history_fetch_period("yfinance", True) == "5y"
 
 
 def test_calculate_drawdown_from_known_prices() -> None:
@@ -273,6 +311,7 @@ def test_config_reports_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["enabled"] is True
     assert payload["google_client_id"] == "example-client-id"
     assert "market_data_provider" in payload
+    assert payload["forecast_preview_enabled"] is False
 
 
 def test_drawdowns_requires_bearer_token_when_auth_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,3 +479,38 @@ def test_yfinance_mode_allows_more_than_five_symbols() -> None:
 
     assert response.status_code == 200
     assert len(response.json()["results"]) == 6
+
+
+def test_drawdowns_endpoint_adds_forecast_when_preview_is_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORECAST_PREVIEW_ENABLED", "true")
+    client = TestClient(create_app(LongHistoryProvider(), forecast_client=FakeForecastClient()))
+
+    response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y", "forecast_preview": True})
+
+    assert response.status_code == 200
+    forecast = response.json()["results"][0]["forecast"]
+    assert forecast["status"] == "ok"
+    assert forecast["points"][0] == {"date": "2026-05-19", "mean": -0.1, "lower": -0.15, "upper": -0.05}
+
+
+def test_drawdowns_endpoint_marks_forecast_as_insufficient_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORECAST_PREVIEW_ENABLED", "true")
+    client = TestClient(create_app(FakeProvider(), forecast_client=FakeForecastClient()))
+
+    response = client.post("/api/drawdowns", json={"symbols": ["7203"], "period": "1y", "forecast_preview": True})
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["forecast"]["status"] == "insufficient_history"
+
+
+def test_drawdowns_endpoint_rejects_forecast_for_non_daily_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORECAST_PREVIEW_ENABLED", "true")
+    client = TestClient(create_app(LongHistoryProvider(), forecast_client=FakeForecastClient()))
+
+    response = client.post(
+        "/api/drawdowns",
+        json={"symbols": ["7203"], "period": "1y", "candle_interval": "weekly", "forecast_preview": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["forecast"]["status"] == "unsupported_interval"

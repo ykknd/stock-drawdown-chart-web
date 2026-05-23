@@ -212,11 +212,11 @@ def test_cached_prices_cache_hit(mock_create_cache_backend, mock_market_data_pro
     app = create_app(provider=mock_market_data_provider)
     client = TestClient(app) # Create client
 
-    cached_points = create_mock_price_points("2022-01-01", "2023-01-01")
+    cached_points = create_mock_price_points("2018-01-01", "2023-01-01")
     cached_data = DailyMarketCacheData(
         points=cached_points,
         fetched_at=time.time(),
-        data_start_date="2022-01-01",
+        data_start_date="2018-01-01",
         data_end_date="2023-01-01",
         provider_type="yfinance",
         symbol="IBM",
@@ -246,7 +246,7 @@ def test_cached_prices_cache_miss_and_set(mock_create_cache_backend, mock_market
 
     mock_cache_backend.get.return_value = None # Cache miss
     
-    provider_points = create_mock_price_points("2022-01-01", "2023-01-01")
+    provider_points = create_mock_price_points("2018-01-01", "2023-01-01")
     mock_market_data_provider.get_adjusted_close.return_value = provider_points
 
     response = call_drawdowns_api(client, "IBM", "1y") # Use helper
@@ -261,11 +261,10 @@ def test_cached_prices_cache_miss_and_set(mock_create_cache_backend, mock_market
     cached_data = cached_call_args[1]
     assert cached_data.symbol == "IBM.T" # Corrected assertion
     assert len(cached_data.points) == len(provider_points)
-    assert cached_data.data_start_date == "2022-01-01"
+    assert cached_data.data_start_date == "2018-01-01"
     assert cached_data.data_end_date == "2023-01-01"
     response_data = response.json()["results"][0]["data"]
-    assert len(response_data) == len(provider_points)
-    assert response_data[0]["date"] == provider_points[0].date
+    assert response_data[0]["date"] == "2022-01-01"
     assert response_data[-1]["date"] == provider_points[-1].date
 
 
@@ -291,8 +290,8 @@ def test_cached_prices_cache_insufficient_and_update(mock_create_cache_backend, 
     mock_cache_backend.get.return_value = cached_data
 
     # Request a larger range (1 year)
-    provider_points_for_1y = create_mock_price_points("2022-01-01", "2023-01-01")
-    mock_market_data_provider.get_adjusted_close.return_value = provider_points_for_1y
+    provider_points_for_5y = create_mock_price_points("2018-01-01", "2023-01-01")
+    mock_market_data_provider.get_adjusted_close.return_value = provider_points_for_5y
 
     response = call_drawdowns_api(client, "IBM", "1y") # Use helper
     assert response.status_code == 200
@@ -305,13 +304,12 @@ def test_cached_prices_cache_insufficient_and_update(mock_create_cache_backend, 
     cached_call_args, _ = mock_cache_backend.set.call_args
     updated_cached_data = cached_call_args[1]
     assert updated_cached_data.symbol == "IBM.T" # Corrected assertion
-    assert len(updated_cached_data.points) == len(provider_points_for_1y) # Should be the 1 year data length
-    assert updated_cached_data.data_start_date == "2022-01-01"
+    assert len(updated_cached_data.points) == len(provider_points_for_5y)
+    assert updated_cached_data.data_start_date == "2018-01-01"
     assert updated_cached_data.data_end_date == "2023-01-01"
     response_data = response.json()["results"][0]["data"]
-    assert len(response_data) == len(provider_points_for_1y)
-    assert response_data[0]["date"] == provider_points_for_1y[0].date
-    assert response_data[-1]["date"] == provider_points_for_1y[-1].date
+    assert response_data[0]["date"] == "2022-01-01"
+    assert response_data[-1]["date"] == provider_points_for_5y[-1].date
 
 
 @patch("stock_drawdown_app.create_cache_backend")

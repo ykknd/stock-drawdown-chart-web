@@ -29,6 +29,8 @@ MAX_TECHNICAL_PERIOD = 100
 MIN_CUSTOM_MONTHS = 1
 MAX_CUSTOM_MONTHS = 600
 DEFAULT_MARKET_DATA_CACHE_TTL_SECONDS = 15 * 60
+FORECAST_HORIZON_BUSINESS_DAYS = 14
+MIN_FORECAST_DAILY_POINTS = 252
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
 JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
@@ -46,6 +48,7 @@ class DrawdownRequest(BaseModel):
     custom_months: int | None = Field(default=None, ge=MIN_CUSTOM_MONTHS, le=MAX_CUSTOM_MONTHS)
     candle_interval: str = DEFAULT_CANDLE_INTERVAL
     technical_indicators: dict[str, TechnicalIndicatorSetting] = Field(default_factory=dict)
+    forecast_preview: bool = False
     jquants_api_key: str | None = Field(default=None, min_length=1, max_length=256)
     jquants_free_tier: bool = True
 
@@ -77,6 +80,7 @@ class SymbolDrawdownResult(BaseModel):
     underwater_days: int | None = None
     is_recovered: bool | None = None
     recovery_progress: float | None = None
+    forecast: "ForecastResult | None" = None
     error: str | None = None
 
 
@@ -109,6 +113,21 @@ class AppConfig(BaseModel):
     requires_jquants_api_key_input: bool = False
     market_data_cache_backend: str = "memory"
     market_data_cache_daily_enabled: bool = True
+    forecast_preview_enabled: bool = False
+
+
+class ForecastPoint(BaseModel):
+    date: str
+    mean: float
+    lower: float
+    upper: float
+
+
+class ForecastResult(BaseModel):
+    status: str
+    latest_data_date: str | None = None
+    points: list[ForecastPoint] = Field(default_factory=list)
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +296,66 @@ class MarketDataProvider(Protocol):
         """Return a human-friendly security name when available."""
 
 
+class ForecastClient(Protocol):
+    def predict_drawdown(
+        self,
+        latest_data_date: str,
+        drawdown_depths: list[float],
+        horizon_business_days: int,
+    ) -> ForecastResult:
+        """Return a drawdown forecast in browser-facing negative drawdown units."""
+
+
+class HTTPForecastClient:
+    def __init__(self, service_url: str, auth_disabled: bool = False) -> None:
+        self.service_url = service_url.rstrip("/")
+        self.auth_disabled = auth_disabled
+
+    def predict_drawdown(
+        self,
+        latest_data_date: str,
+        drawdown_depths: list[float],
+        horizon_business_days: int,
+    ) -> ForecastResult:
+        import requests
+
+        headers = {"Content-Type": "application/json"}
+        if not self.auth_disabled:
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token
+
+            token = id_token.fetch_id_token(google_requests.Request(), self.service_url)
+            headers["Authorization"] = f"Bearer {token}"
+
+        response = requests.post(
+            f"{self.service_url}/predict/drawdown",
+            json={
+                "latest_data_date": latest_data_date,
+                "drawdown_depths": drawdown_depths,
+                "horizon_business_days": horizon_business_days,
+            },
+            headers=headers,
+            timeout=120,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        points = [
+            ForecastPoint(
+                date=point["date"],
+                mean=round(-abs(float(point["mean"])), 8),
+                lower=round(-abs(float(point["upper"])), 8),
+                upper=round(-abs(float(point["lower"])), 8),
+            )
+            for point in payload.get("points", [])
+        ]
+        return ForecastResult(
+            status=payload.get("status", "ok"),
+            latest_data_date=payload.get("latest_data_date", latest_data_date),
+            points=points,
+            message=payload.get("message"),
+        )
+
+
 class YFinanceMarketDataProvider:
     def get_adjusted_close(
         self,
@@ -371,21 +450,22 @@ class JQuantsMarketDataProvider:
             return date.today() - timedelta(weeks=jquants_free_data_lag_weeks())
         return date.today()
 
-    def _get_start_date(self, period: str, custom_months: int | None) -> date:
+    def _get_start_date(self, period: str, custom_months: int | None, end_date: date | None = None) -> date:
+        anchor_date = end_date or date.today()
         if period == "custom":
-            return subtract_months(date.today(), custom_months or 12)
+            return subtract_months(anchor_date, custom_months or 12)
         if period == "1mo":
-            return subtract_months(date.today(), 1)
+            return subtract_months(anchor_date, 1)
         if period == "3mo":
-            return subtract_months(date.today(), 3)
+            return subtract_months(anchor_date, 3)
         if period == "6mo":
-            return subtract_months(date.today(), 6)
+            return subtract_months(anchor_date, 6)
         if period == "1y":
-            return subtract_months(date.today(), 12)
+            return subtract_months(anchor_date, 12)
         if period == "2y":
-            return subtract_months(date.today(), 24)
+            return subtract_months(anchor_date, 24)
         if period == "5y":
-            return subtract_months(date.today(), 60)
+            return subtract_months(anchor_date, 60)
         # J-Quants 'max' is restricted to 2008-01-01 for now
         return date(2008, 1, 1)
 
@@ -409,7 +489,7 @@ class JQuantsMarketDataProvider:
         from tenacity import RetryError
 
         end_date = self._get_end_date(jquants_free_tier)
-        start_date = self._get_start_date(period, custom_months)
+        start_date = self._get_start_date(period, custom_months, end_date=end_date)
         if start_date >= end_date:
             raise ValueError("J-Quants無料枠ではこの期間に取得可能なデータがありません")
         
@@ -631,6 +711,24 @@ def requested_date_range(period: str, custom_months: int | None) -> tuple[str, s
     return start_date.isoformat(), end_date.isoformat()
 
 
+def history_fetch_period(provider_type: str, jquants_free_tier: bool) -> str:
+    if provider_type == "jquants" and jquants_free_tier:
+        return "2y"
+    return "5y"
+
+
+def history_date_range(provider_type: str, jquants_free_tier: bool) -> tuple[str, str]:
+    end_date = date.today()
+    if provider_type == "jquants" and jquants_free_tier:
+        end_date = end_date - timedelta(weeks=jquants_free_data_lag_weeks())
+    months = 24 if provider_type == "jquants" and jquants_free_tier else 60
+    return subtract_months(end_date, months).isoformat(), end_date.isoformat()
+
+
+def slice_price_points(points: list[PricePoint], start_date: str, end_date: str) -> list[PricePoint]:
+    return [point for point in points if start_date <= point.date <= end_date]
+
+
 def normalize_candle_interval(candle_interval: str) -> str:
     normalized = candle_interval.strip().lower()
     if normalized not in SUPPORTED_CANDLE_INTERVALS:
@@ -687,6 +785,18 @@ def get_google_client_id() -> str | None:
 
 def get_allowed_email() -> str | None:
     return os.getenv("ALLOWED_EMAIL", "").strip().lower() or None
+
+
+def is_forecast_preview_enabled() -> bool:
+    return os.getenv("FORECAST_PREVIEW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_forecast_service_url() -> str | None:
+    return os.getenv("FORECAST_SERVICE_URL", "").strip() or None
+
+
+def is_forecast_service_auth_disabled() -> bool:
+    return os.getenv("FORECAST_SERVICE_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def verify_google_token(token: str) -> str:
@@ -1012,7 +1122,7 @@ def create_cache_backend(backend_type: str) -> MarketDataCache:
     return MemoryMarketDataCache()
 
 
-def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
+def create_app(provider: MarketDataProvider | None = None, forecast_client: ForecastClient | None = None) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     
     provider_type = normalize_market_data_provider(os.getenv("MARKET_DATA_PROVIDER"))
@@ -1026,6 +1136,13 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
     cache_ttl_seconds = market_data_cache_ttl_seconds()
     cache_backend_type = os.getenv("MARKET_DATA_CACHE_BACKEND", "memory").lower()
     daily_cache = create_cache_backend(cache_backend_type)
+    forecast_service_url = get_forecast_service_url()
+    configured_forecast_client = forecast_client
+    if configured_forecast_client is None and forecast_service_url:
+        configured_forecast_client = HTTPForecastClient(
+            forecast_service_url,
+            auth_disabled=is_forecast_service_auth_disabled(),
+        )
     
     jquants_interval_seconds = jquants_request_interval_seconds() if provider is None else 0.0
     last_jquants_request_at = 0.0
@@ -1055,14 +1172,15 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
         last_jquants_request_at = now
 
     def get_cached_prices(
-        symbol: str, period: str, custom_months: int | None, api_key: str | None, jquants_free_tier: bool
+        symbol: str, api_key: str | None, jquants_free_tier: bool
     ) -> list[PricePoint]:
         scope = get_credential_scope(api_key)
         jst_date = get_jst_date()
         # Cache key does not contain API key directly
         cache_key = f"{provider_type}_{scope}_{symbol}_{jquants_free_tier}_{jst_date}"
         
-        req_start, req_end = requested_date_range(period, custom_months)
+        fetch_period = history_fetch_period(provider_type, jquants_free_tier)
+        req_start, req_end = history_date_range(provider_type, jquants_free_tier)
         
         cached = daily_cache.get(cache_key)
         if cached:
@@ -1077,7 +1195,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             
         wait_for_jquants_rate_limit()
         prices = market_data_provider.get_adjusted_close(
-            symbol, period, custom_months, api_key=api_key, jquants_free_tier=jquants_free_tier
+            symbol, fetch_period, None, api_key=api_key, jquants_free_tier=jquants_free_tier
         )
         
         # Update cache with potentially wider range
@@ -1105,7 +1223,39 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             jquants_free_tier=jquants_free_tier
         ))
         
-        return [p for p in new_points if req_start <= p.date <= req_end]
+        return slice_price_points(new_points, req_start, req_end)
+
+    def build_forecast_result(raw_prices: list[PricePoint], request_preview: bool, candle_interval: str) -> ForecastResult | None:
+        if not request_preview:
+            return None
+        if not is_forecast_preview_enabled():
+            return ForecastResult(status="disabled", message="Forecast preview is disabled.")
+        if candle_interval != "daily":
+            return ForecastResult(status="unsupported_interval", message="Forecast preview is available only for daily candles.")
+        if len(raw_prices) < MIN_FORECAST_DAILY_POINTS:
+            latest_date = raw_prices[-1].date if raw_prices else None
+            return ForecastResult(
+                status="insufficient_history",
+                latest_data_date=latest_date,
+                message="At least one year of daily data is required for forecast preview.",
+            )
+        if configured_forecast_client is None:
+            return ForecastResult(status="unavailable", latest_data_date=raw_prices[-1].date, message="Forecast service is unavailable.")
+
+        raw_drawdowns, _, _ = calculate_drawdown(raw_prices)
+        drawdown_depths = [round(-point.drawdown, 8) for point in raw_drawdowns]
+        try:
+            return configured_forecast_client.predict_drawdown(
+                latest_data_date=raw_prices[-1].date,
+                drawdown_depths=drawdown_depths,
+                horizon_business_days=FORECAST_HORIZON_BUSINESS_DAYS,
+            )
+        except Exception:
+            return ForecastResult(
+                status="unavailable",
+                latest_data_date=raw_prices[-1].date,
+                message="Forecast service is unavailable.",
+            )
 
     def get_cached_security_name(symbol: str, api_key: str | None) -> str | None:
         scope = get_credential_scope(api_key)
@@ -1143,6 +1293,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
             requires_jquants_api_key_input=(provider_type == "jquants" and jquants_key_env is None),
             market_data_cache_backend=cache_backend_type,
             market_data_cache_daily_enabled=True,
+            forecast_preview_enabled=is_forecast_preview_enabled(),
         )
 
     @app.get("/api/market-events", response_model=list[MarketEvent])
@@ -1179,12 +1330,12 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                 
                 prices = get_cached_prices(
                     normalized_symbol,
-                    period,
-                    custom_months,
                     api_key=effective_api_key,
                     jquants_free_tier=request.jquants_free_tier,
                 )
-                prices = aggregate_price_points(prices, candle_interval)
+                forecast = build_forecast_result(prices, request.forecast_preview, candle_interval)
+                visible_prices = slice_price_points(prices, requested_start_date, requested_end_date)
+                prices = aggregate_price_points(visible_prices, candle_interval)
                 name = get_cached_security_name(normalized_symbol, api_key=effective_api_key)
                 
                 data, max_drawdown, current_drawdown = calculate_drawdown(prices, technical_indicators)
@@ -1206,6 +1357,7 @@ def create_app(provider: MarketDataProvider | None = None) -> FastAPI:
                         underwater_days=recovery.underwater_days,
                         is_recovered=recovery.is_recovered,
                         recovery_progress=recovery.recovery_progress,
+                        forecast=forecast,
                     )
                 )
             except Exception as exc:

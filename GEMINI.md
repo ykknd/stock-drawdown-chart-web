@@ -58,6 +58,11 @@ Geminiは原則として以下を作成・更新しません。
 - 本番公開はDocker + Google Cloud Runを想定します。
 - 本番デプロイはGitHub Actionsの `v*` タグをトリガーにします。
 
+## Forecasting Notes
+
+- Drawdown forecasting preview uses a separate private Cloud Run inference service and must not load TimesFM in the lightweight web service.
+- Keep forecast service deployment, IAM, and image changes aligned with `spec/drawdown-forecasting/`.
+
 ## Common Commands
 
 ```powershell
