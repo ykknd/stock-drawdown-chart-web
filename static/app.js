@@ -1,7 +1,7 @@
 const { useEffect, useMemo, useState } = React;
 const h = React.createElement;
 const STORAGE_KEY = "drawdown-board-symbols";
-const SELECTED_SECURITIES_STORAGE_KEY = "drawdown-board-selected-security-codes";
+const SELECTED_SECURITIES_STORAGE_KEY = "drawdown-board-selected-security-codes-v2";
 const PERIOD_STORAGE_KEY = "drawdown-board-period";
 const CUSTOM_MONTHS_STORAGE_KEY = "drawdown-board-custom-months";
 const CANDLE_INTERVAL_STORAGE_KEY = "drawdown-board-candle-interval";
@@ -9,6 +9,7 @@ const DD_RANGE_STORAGE_KEY = "drawdown-board-dd-range";
 const X_ZOOM_STORAGE_KEY = "drawdown-board-x-zoom";
 const TECHNICAL_INDICATORS_STORAGE_KEY = "drawdown-board-technical-indicators";
 const FORECAST_PREVIEW_STORAGE_KEY = "drawdown-board-forecast-preview";
+const TIMESFM_REPOSITORY_URL = "https://github.com/google-research/timesfm";
 const AFFILIATE_ADS = [
   {
     label: "広告 / PR",
@@ -20,9 +21,18 @@ const AFFILIATE_ADS = [
     imageSrc: "https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/1184/9784478121184_1_13.jpg?_ex=64x64",
     trackingPixelSrc: "https://www17.a8.net/0.gif?a8mat=4B3RV1+E80T0Y+2HOM+BWGDT",
   },
+  {
+    label: "広告 / PR",
+    variant: "banner",
+    href: "https://px.a8.net/svt/ejp?a8mat=4B3RV1+EIQLWY+ONS+TUO9T",
+    imageSrc: "https://www29.a8.net/svt/bgt?aid=260516557878&wid=001&eno=01&mid=s00000003196005014000&mc=1",
+    imageWidth: 100,
+    imageHeight: 60,
+    trackingPixelSrc: "https://www14.a8.net/0.gif?a8mat=4B3RV1+EIQLWY+ONS+TUO9T",
+  },
 ];
 const DEFAULT_SYMBOLS = "7203, 6758, 9984";
-const DEFAULT_SECURITY_CODES = ["7203", "6758", "9984"];
+const DEFAULT_SECURITY_CODES = [];
 const BENCHMARK_SYMBOL = "^N225";
 const JQUANTS_FREE_TIER_SELECTION_LIMIT = 5;
 const DEFAULT_SELECTION_LIMIT = 20;
@@ -628,8 +638,9 @@ function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators, dat
   const xTickDates = dateTicksForDomain(xDomain, 6);
   const missingDataWindows = missingDataRects(data, xDomain, area);
   const drawdownFillPath = buildFixedRangeTopFillPath(data, (point) => point.drawdown, -ddRange / 100, 0, area, xDomain);
-  const forecastPath = buildFixedRangePath(forecastPoints, (point) => point.mean, -ddRange / 100, 0, area, xDomain);
-  const forecastBandPath = buildForecastBandPath(forecastPoints, -ddRange / 100, 0, area, xDomain);
+  const forecastFillPath = buildFixedRangeTopFillPath(forecastPoints, (point) => point.mean, -ddRange / 100, 0, area, xDomain);
+  const forecastLowerPath = buildFixedRangePath(forecastPoints, (point) => point.lower, -ddRange / 100, 0, area, xDomain);
+  const forecastUpperPath = buildFixedRangePath(forecastPoints, (point) => point.upper, -ddRange / 100, 0, area, xDomain);
   const bodyWidth = candleWidth(data.length, area);
   const latest = data[data.length - 1];
   const first = data[0];
@@ -704,8 +715,9 @@ function DrawdownChart({ result, ddRange, marketEvents, technicalIndicators, dat
         );
       }),
       h("path", { d: drawdownFillPath, className: "drawdown-fill" }),
-      forecastBandPath ? h("path", { d: forecastBandPath, className: "forecast-band" }) : null,
-      forecastPath ? h("path", { d: forecastPath, className: "forecast-line" }) : null,
+      forecastFillPath ? h("path", { d: forecastFillPath, className: "forecast-fill" }) : null,
+      forecastLowerPath ? h("path", { d: forecastLowerPath, className: "forecast-interval-line" }) : null,
+      forecastUpperPath ? h("path", { d: forecastUpperPath, className: "forecast-interval-line" }) : null,
       data.map((point, index) => {
         const x = xForDate(point.date, xDomain, area);
         if (x === null) return null;
@@ -965,7 +977,7 @@ function DrawdownPreviewFigure() {
   );
 }
 
-function PublicLandingPage({ authError }) {
+function PublicLandingPage({ authError, onEnterApp }) {
   return h(
     "main",
     { className: "app-shell public-shell" },
@@ -990,6 +1002,13 @@ function PublicLandingPage({ authError }) {
             ),
             h("p", { className: "public-login-note" }, "分析機能の利用にはGoogleログインが必要です。"),
             h("div", { id: "google-signin", className: "google-signin" }),
+            onEnterApp
+              ? h(
+                  "button",
+                  { type: "button", className: "public-enter-button", onClick: onEnterApp },
+                  "分析画面へ戻る"
+                )
+              : null,
             h("p", { className: "public-key-note" }, "利用にはJ-Quants APIキーが必要です。ログイン後に入力して株価データを取得します。"),
             authError ? h("div", { className: "notice" }, authError) : null
           ),
@@ -1000,18 +1019,30 @@ function PublicLandingPage({ authError }) {
           { className: "public-feature-strip" },
           h("div", null, h("strong", null, "Drawdown比較"), h("span", null, "複数銘柄を同じ軸で比較")),
           h("div", null, h("strong", null, "回復力"), h("span", null, "高値から底値、回復日まで表示")),
-          h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替"))
+          h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替")),
+          h("div", null, h("strong", null, "時系列予測 preview"), h("span", null, "日足のみ / TimesFMで14営業日先のDDを試算"))
         ),
         h(HelpPage),
-        h(
-          "footer",
-          { className: "privacy-footer public-privacy-footer" },
-          h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
-          h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
-        )
+        h(PrivacyFooter, { publicFooter: true })
       ),
       h(AffiliateAdPanel)
     )
+  );
+}
+
+function PrivacyFooter({ publicFooter = false }) {
+  return h(
+    "footer",
+    { className: `privacy-footer${publicFooter ? " public-privacy-footer" : ""}` },
+    h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
+    h(
+      "p",
+      null,
+      "時系列予測 preview の予測モデルには ",
+      h("a", { href: TIMESFM_REPOSITORY_URL, target: "_blank", rel: "noreferrer" }, "TimesFM"),
+      " を使用しています。予測は将来の値動きを保証するものではなく、投資判断およびその結果については利用者ご自身の責任で行ってください。"
+    ),
+    h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断を推奨するものではありません。")
   );
 }
 
@@ -1019,7 +1050,27 @@ function AffiliateAdPanel() {
   return h(
     "aside",
     { className: "affiliate-ad-panel", "aria-label": "広告" },
-    AFFILIATE_ADS.map((ad) =>
+    AFFILIATE_ADS.map((ad) => {
+      if (ad.variant === "banner") {
+        return h(
+          "article",
+          { className: "affiliate-ad-item affiliate-ad-banner", key: ad.href },
+          h("span", { className: "affiliate-ad-label" }, ad.label),
+          h(
+            "a",
+            { className: "affiliate-ad-banner-link", href: ad.href, target: "_blank", rel: "nofollow sponsored noreferrer" },
+            h("img", {
+              className: "affiliate-ad-banner-image",
+              src: ad.imageSrc,
+              alt: "",
+              width: ad.imageWidth || 100,
+              height: ad.imageHeight || 60,
+            })
+          ),
+          h("img", { className: "affiliate-tracking-pixel", src: ad.trackingPixelSrc, alt: "", width: 1, height: 1 })
+        );
+      }
+      return (
       h(
         "article",
         { className: "affiliate-ad-item", key: ad.href },
@@ -1039,16 +1090,15 @@ function AffiliateAdPanel() {
         ),
         h("img", { className: "affiliate-tracking-pixel", src: ad.trackingPixelSrc, alt: "", width: 1, height: 1 })
       )
-    )
+      );
+    })
   );
 }
 
 function App() {
   const [selectedSecurityCodes, setSelectedSecurityCodes] = useState(() =>
     uniqueCodes(
-      parseStoredSecurityCodes(localStorage.getItem(SELECTED_SECURITIES_STORAGE_KEY)) ||
-        parseStoredSecurityCodes(localStorage.getItem(STORAGE_KEY)) ||
-        DEFAULT_SECURITY_CODES
+      parseStoredSecurityCodes(localStorage.getItem(SELECTED_SECURITIES_STORAGE_KEY)) || DEFAULT_SECURITY_CODES
     )
   );
   const [securitySearch, setSecuritySearch] = useState("");
@@ -1084,6 +1134,7 @@ function App() {
   });
   const [authToken, setAuthToken] = useState("");
   const [authError, setAuthError] = useState("");
+  const [showPublicLanding, setShowPublicLanding] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1221,6 +1272,7 @@ function App() {
         client_id: appConfig.google_client_id,
         callback: (response) => {
           setAuthToken(response.credential || "");
+          setShowPublicLanding(false);
           setAuthError("");
         },
       });
@@ -1382,12 +1434,33 @@ function App() {
     fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, jquantsFreeTier, customMonths, forecastPreview);
   }
 
+  function onUpdateClick() {
+    fetchDrawdowns(symbols, period, candleInterval, technicalIndicators, jquantsFreeTier, customMonths, forecastPreview);
+  }
+
+  function returnToPublicLanding() {
+    window.google?.accounts?.id?.disableAutoSelect?.();
+    setShowPublicLanding(true);
+    setAuthToken("");
+    setAuthError("");
+    setShowHelp(false);
+    setError("");
+  }
+
+  function enterAppFromPublicLanding() {
+    setShowPublicLanding(false);
+    setAuthError("");
+  }
+
   if (!appConfig.loaded) {
     return h("main", { className: "app-shell" }, h("div", { className: "auth-panel" }, "読み込み中"));
   }
 
-  if (appConfig.enabled && !authToken) {
-    return h(PublicLandingPage, { authError });
+  if (showPublicLanding || (appConfig.enabled && !authToken)) {
+    return h(PublicLandingPage, {
+      authError,
+      onEnterApp: !appConfig.enabled ? enterAppFromPublicLanding : null,
+    });
   }
 
   return h(
@@ -1410,9 +1483,18 @@ function App() {
               { className: "title-row" },
               h("div", null, h("h1", null, "Drawdown Board"), h("p", null, "日本株 / 調整後終値")),
               h(
-                "button",
-                { type: "button", className: "help-toggle", onClick: () => setShowHelp(!showHelp) },
-                showHelp ? "チャートに戻る" : "ヘルプ / FAQ"
+                "div",
+                { className: "title-actions" },
+                h(
+                  "button",
+                  { type: "button", className: "help-toggle", onClick: returnToPublicLanding },
+                  "ログイン前画面"
+                ),
+                h(
+                  "button",
+                  { type: "button", className: "help-toggle", onClick: () => setShowHelp(!showHelp) },
+                  showHelp ? "チャートに戻る" : "ヘルプ / FAQ"
+                )
               )
             ),
             h(
@@ -1527,7 +1609,7 @@ function App() {
                         onChange: onJQuantsFreeTierChange,
                       }),
                       h("span", null, "J-Quants無料枠"),
-                      h("small", null, "無料枠では直近12週を除いた範囲を取得します。有料枠の場合はチェックを外してください。")
+                      h("small", null, "無料枠では直近12週を除いた範囲を取得します。レート制限を避けるため、無料枠ON時は最大5銘柄まで選択できます。有料枠の場合はチェックを外してください。")
                     )
                   ),
                   appConfig.requires_jquants_api_key_input
@@ -1554,101 +1636,118 @@ function App() {
             : null,
           error ? h("div", { className: "notice" }, error) : null,
           h(
-            "div",
-            { className: "chart-controls" },
-            h(
-              "label",
-              { className: "range-control" },
-              h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
-              h("input", {
-                type: "range",
-                min: "1",
-                max: "100",
-                step: "1",
-                value: ddRange,
-                onChange: onDdRangeChange,
-                "aria-label": "DD軸レンジ",
-              })
-            ),
-            h(
-              "label",
-              { className: "range-control" },
-              h("span", null, `表示期間 ${xZoom}%`),
-              h("input", {
-                type: "range",
-                min: "5",
-                max: "100",
-                step: "1",
-                value: xZoom,
-                onChange: onXZoomChange,
-                "aria-label": "x軸表示期間",
-              })
-            ),
-            h(
-              "label",
-              { className: "candle-control" },
-              h("span", null, "ローソク足"),
-              h(
-                "select",
-                { value: candleInterval, onChange: onCandleIntervalChange, "aria-label": "ローソク足の粒度", disabled: loading },
-                CANDLE_INTERVAL_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
-              )
-            ),
+            "details",
+            { className: "analysis-options-panel", open: true },
+            h("summary", null, "分析オプション"),
             h(
               "div",
-              { className: "indicator-control" },
-              h("span", null, "テクニカル"),
+              { className: "analysis-options-body" },
               h(
                 "div",
-                { className: "indicator-options" },
-                TECHNICAL_INDICATOR_OPTIONS.map(([value, label]) => {
-                  const setting = technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value];
-                  return h(
+                { className: "analysis-update-row" },
+                h(
+                  "button",
+                  { type: "button", className: "analysis-update-button", onClick: onUpdateClick, disabled: loading || symbols.length === 0 || overSelectionLimit },
+                  loading ? "取得中" : "更新"
+                )
+              ),
+              h(
+                "div",
+                { className: "chart-controls" },
+                h(
+                  "label",
+                  { className: "range-control" },
+                  h("span", null, `DD軸レンジ 0〜-${ddRange}%`),
+                  h("input", {
+                    type: "range",
+                    min: "1",
+                    max: "100",
+                    step: "1",
+                    value: ddRange,
+                    onChange: onDdRangeChange,
+                    "aria-label": "DD軸レンジ",
+                  })
+                ),
+                h(
+                  "label",
+                  { className: "range-control" },
+                  h("span", null, `表示期間 ${xZoom}%`),
+                  h("input", {
+                    type: "range",
+                    min: "5",
+                    max: "100",
+                    step: "1",
+                    value: xZoom,
+                    onChange: onXZoomChange,
+                    "aria-label": "x軸表示期間",
+                  })
+                ),
+                h(
+                  "label",
+                  { className: "candle-control" },
+                  h("span", null, "ローソク足"),
+                  h(
+                    "select",
+                    { value: candleInterval, onChange: onCandleIntervalChange, "aria-label": "ローソク足の粒度", disabled: loading },
+                    CANDLE_INTERVAL_OPTIONS.map(([value, label]) => h("option", { key: value, value }, label))
+                  )
+                ),
+                h(
+                  "div",
+                  { className: "indicator-control" },
+                  h("span", null, "テクニカル"),
+                  h(
                     "div",
-                    { key: value, className: "indicator-option" },
-                    h(
-                      "label",
-                      null,
-                      h("input", {
-                        type: "checkbox",
-                        value,
-                        checked: Boolean(setting.enabled),
-                        onChange: onTechnicalIndicatorEnabledChange,
-                      }),
-                      h("span", null, label)
-                    ),
-                    h("span", { className: "indicator-separator" }, ":"),
-                    h("input", {
-                      type: "number",
-                      min: "1",
-                      max: "100",
-                      step: "1",
-                      value: setting.period,
-                      disabled: !setting.enabled,
-                      onChange: (event) => onTechnicalIndicatorPeriodChange(value, event.target.value),
-                      "aria-label": `${label} 集約期間`,
-                    })
-                  );
-                })
-                ,
-                appConfig.forecast_preview_enabled
-                  ? h(
-                      "div",
-                      { className: "indicator-option forecast-preview-option" },
-                      h(
-                        "label",
-                        null,
+                    { className: "indicator-options" },
+                    TECHNICAL_INDICATOR_OPTIONS.map(([value, label]) => {
+                      const setting = technicalIndicators[value] || DEFAULT_TECHNICAL_INDICATORS[value];
+                      return h(
+                        "div",
+                        { key: value, className: "indicator-option" },
+                        h(
+                          "label",
+                          null,
+                          h("input", {
+                            type: "checkbox",
+                            value,
+                            checked: Boolean(setting.enabled),
+                            onChange: onTechnicalIndicatorEnabledChange,
+                          }),
+                          h("span", null, label)
+                        ),
+                        h("span", { className: "indicator-separator" }, ":"),
                         h("input", {
-                          type: "checkbox",
-                          checked: forecastPreview,
-                          disabled: candleInterval !== "daily",
-                          onChange: onForecastPreviewChange,
-                        }),
-                        h("span", null, "時系列予測(preview)")
-                      ),
-                      candleInterval !== "daily" ? h("small", null, "日足のみ") : null
-                    )
-                  : null
+                          type: "number",
+                          min: "1",
+                          max: "100",
+                          step: "1",
+                          value: setting.period,
+                          disabled: !setting.enabled,
+                          onChange: (event) => onTechnicalIndicatorPeriodChange(value, event.target.value),
+                          "aria-label": `${label} 集約期間`,
+                        })
+                      );
+                    }),
+                    appConfig.forecast_preview_enabled
+                      ? h(
+                          "div",
+                          { className: "indicator-option forecast-preview-option" },
+                          h(
+                            "label",
+                            null,
+                            h("input", {
+                              type: "checkbox",
+                              checked: forecastPreview,
+                              disabled: candleInterval !== "daily",
+                              onChange: onForecastPreviewChange,
+                            }),
+                            h("span", null, "時系列予測(preview)")
+                          ),
+                          candleInterval !== "daily" ? h("small", null, "日足のみ") : null
+                        )
+                      : null
+                  )
+                )
               )
             )
           )
@@ -1666,12 +1765,7 @@ function App() {
                   h(ResultCard, { key: result.symbol, result, ddRange, marketEvents, technicalIndicators, dateRange: visibleRange })
                 )
               ),
-          h(
-            "footer",
-            { className: "privacy-footer" },
-            h("p", null, "Googleログインは本人確認のみに使用します。Googleパスワード、Google APIアクセストークン、refresh tokenは取得・保存しません。J-Quants APIキーは価格取得リクエスト時のみ送信され、ブラウザやサーバーに永続保存しません。"),
-            h("p", null, "本サイトの情報は投資判断の参考情報であり、投資判断およびその結果については利用者ご自身の責任で行ってください。")
-          )
+          h(PrivacyFooter)
         )
       ),
       h(AffiliateAdPanel)

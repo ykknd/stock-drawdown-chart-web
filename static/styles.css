@@ -110,6 +110,14 @@ h1 {
   justify-content: space-between;
 }
 
+.title-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .help-toggle {
   flex: 0 0 auto;
   min-height: 38px;
@@ -124,6 +132,22 @@ h1 {
 
 .help-toggle:hover {
   background: #f5f8fa;
+}
+
+.public-enter-button {
+  width: fit-content;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 16px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.public-enter-button:hover {
+  background: #1c3454;
 }
 
 .symbol-form {
@@ -607,7 +631,7 @@ h1 {
 
 .public-feature-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin: 6px 0 28px;
 }
@@ -632,13 +656,62 @@ h1 {
   padding-bottom: 16px;
 }
 
+.analysis-options-panel {
+  margin: 14px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.analysis-options-panel summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.analysis-options-panel summary::marker {
+  color: var(--muted);
+}
+
+.analysis-options-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.analysis-update-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.analysis-update-button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 18px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.analysis-update-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .chart-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
   justify-content: space-between;
   align-items: center;
-  padding: 18px 0 8px;
+  padding: 0 0 4px;
 }
 
 .range-control {
@@ -779,6 +852,18 @@ h1 {
   width: 64px;
   height: 64px;
   object-fit: cover;
+}
+
+.affiliate-ad-banner-link {
+  display: inline-flex;
+  width: fit-content;
+}
+
+.affiliate-ad-banner-image {
+  display: block;
+  width: 100px;
+  height: 60px;
+  border: 0;
 }
 
 .affiliate-ad-copy {
@@ -1086,16 +1171,16 @@ svg {
   pointer-events: none;
 }
 
-.forecast-band {
-  fill: rgb(68 79 88 / 14%);
+.forecast-fill {
+  fill: rgb(232 184 48 / 22%);
   pointer-events: none;
 }
 
-.forecast-line {
+.forecast-interval-line {
   fill: none;
-  stroke: #404f58;
-  stroke-width: 2.2;
-  stroke-dasharray: 6 5;
+  stroke: #d2a11f;
+  stroke-width: 1.8;
+  stroke-dasharray: 2 5;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
