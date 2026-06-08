@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import csv
+import json
 import os
+import sys
 import time
 from datetime import date, datetime, timedelta
 from dataclasses import dataclass
@@ -34,6 +37,13 @@ MIN_FORECAST_DAILY_POINTS = 252
 STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
 JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
+NIKKEI225_CONSTITUENTS_PATH = Path(__file__).parent / "data" / "nikkei225_constituents.csv"
+MARKET_CAP_RANKING_PATH = Path(__file__).parent / "data" / "jpx_market_cap_top100_latest.csv"
+DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS = 5
+DEFAULT_PUBLIC_ANALYSIS_PREFIX = "public-analysis"
+DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
+DEFAULT_PUBLIC_ANALYSIS_LIMIT = 100
+PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
 auth_scheme = HTTPBearer(auto_error=False)
 
 
@@ -114,6 +124,33 @@ class AppConfig(BaseModel):
     market_data_cache_backend: str = "memory"
     market_data_cache_daily_enabled: bool = True
     forecast_preview_enabled: bool = False
+
+
+class PublicAnalysisItem(BaseModel):
+    code: str
+    name: str
+    current_drawdown_pct: float
+    current_drawdown_days: int
+    recovery_progress_pct: float
+    peak_date: str
+    trough_date: str
+    latest_price_date: str
+    status: str
+
+
+class PublicAnalysisSnapshot(BaseModel):
+    as_of_date: str
+    published_at: str
+    provider: str
+    universe_month: str
+    item_count: int
+    items: list[PublicAnalysisItem] = Field(default_factory=list)
+
+
+class PublicAnalysisResponse(BaseModel):
+    snapshot: PublicAnalysisSnapshot | None = None
+    stale: bool = True
+    message: str | None = None
 
 
 class ForecastPoint(BaseModel):
@@ -203,6 +240,25 @@ class RecoveryMetrics:
     recovery_progress: float
 
 
+@dataclass(frozen=True)
+class RankedSecurity:
+    universe_month: str
+    rank: int
+    code: str
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class CurrentDrawdownMetrics:
+    peak_date: str
+    trough_date: str
+    latest_price_date: str
+    current_drawdown_pct: float
+    current_drawdown_days: int
+    recovery_progress_pct: float
+    status: str
+
+
 class MarketDataCache(Protocol):
     def get(self, key: str) -> DailyMarketCacheData | None:
         """Get daily cache data."""
@@ -279,6 +335,74 @@ class GCSMarketDataCache:
             blob.upload_from_string(json.dumps(data.to_dict(), ensure_ascii=False), content_type="application/json")
         except Exception:
             pass
+
+
+class PublicAnalysisStore(Protocol):
+    def load(self, key: str) -> dict | None:
+        """Load a JSON payload by key."""
+
+    def save(self, key: str, payload: dict) -> None:
+        """Persist a JSON payload by key."""
+
+
+class MemoryPublicAnalysisStore:
+    def __init__(self) -> None:
+        self._data: dict[str, dict] = {}
+
+    def load(self, key: str) -> dict | None:
+        return self._data.get(key)
+
+    def save(self, key: str, payload: dict) -> None:
+        self._data[key] = payload
+
+
+class LocalFilePublicAnalysisStore:
+    def __init__(self, root_dir: Path) -> None:
+        self.root_dir = root_dir
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, key: str) -> Path:
+        normalized = key.replace("/", os.sep)
+        return self.root_dir / normalized
+
+    def load(self, key: str) -> dict | None:
+        path = self._path(key)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def save(self, key: str, payload: dict) -> None:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class GCSPublicAnalysisStore:
+    def __init__(self, bucket_name: str, prefix: str) -> None:
+        from google.cloud import storage
+
+        self.client = storage.Client()
+        self.bucket = self.client.bucket(bucket_name)
+        self.prefix = prefix.strip("/")
+
+    def _name(self, key: str) -> str:
+        return f"{self.prefix}/{key}" if self.prefix else key
+
+    def load(self, key: str) -> dict | None:
+        blob = self.bucket.blob(self._name(key))
+        try:
+            if not blob.exists():
+                return None
+            return json.loads(blob.download_as_text())
+        except Exception:
+            return None
+
+    def save(self, key: str, payload: dict) -> None:
+        blob = self.bucket.blob(self._name(key))
+        blob.upload_from_string(json.dumps(payload, ensure_ascii=False, indent=2), content_type="application/json")
 
 
 class MarketDataProvider(Protocol):
@@ -659,6 +783,73 @@ def get_local_security_name(symbol: str) -> str | None:
     return None
 
 
+def load_nikkei225_constituents(path: Path = NIKKEI225_CONSTITUENTS_PATH) -> list[SecurityInfo]:
+    if not path.exists():
+        return []
+
+    constituents: list[SecurityInfo] = []
+    seen: set[str] = set()
+    with path.open(newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            code = (row.get("code") or "").strip().upper()
+            if not code or code in seen:
+                continue
+            name = (row.get("name") or "").strip() or get_local_security_name(code) or code
+            constituents.append(SecurityInfo(code=code, name=name))
+            seen.add(code)
+    return constituents
+
+
+def load_market_cap_ranking(path: Path = MARKET_CAP_RANKING_PATH) -> list[RankedSecurity]:
+    if not path.exists():
+        return []
+
+    ranking: list[RankedSecurity] = []
+    with path.open(newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            code = (row.get("code") or "").strip().upper()
+            month = (row.get("universe_month") or "").strip()
+            rank_raw = (row.get("rank") or "").strip()
+            if not code or not month or not rank_raw:
+                continue
+            try:
+                rank = int(rank_raw)
+            except ValueError:
+                continue
+            name = (row.get("name") or "").strip() or get_local_security_name(code)
+            ranking.append(RankedSecurity(universe_month=month, rank=rank, code=code, name=name))
+    return sorted(ranking, key=lambda item: item.rank)
+
+
+def build_public_analysis_universe(
+    nikkei_constituents: list[SecurityInfo] | None = None,
+    market_cap_ranking: list[RankedSecurity] | None = None,
+    limit: int = DEFAULT_PUBLIC_ANALYSIS_LIMIT,
+) -> tuple[str, list[SecurityInfo]]:
+    nikkei_constituents = nikkei_constituents or load_nikkei225_constituents()
+    market_cap_ranking = market_cap_ranking or load_market_cap_ranking()
+    nikkei_by_code = {security.code.upper(): security for security in nikkei_constituents}
+
+    selected: list[SecurityInfo] = []
+    universe_month = ""
+    for ranked in market_cap_ranking:
+        security = nikkei_by_code.get(ranked.code.upper())
+        if security is None:
+            continue
+        universe_month = universe_month or ranked.universe_month
+        selected.append(
+            SecurityInfo(
+                code=security.code,
+                name=ranked.name or security.name or get_local_security_name(security.code) or security.code,
+            )
+        )
+        if len(selected) >= limit:
+            break
+    return universe_month, selected
+
+
 def normalize_japanese_symbol(raw_symbol: str) -> str:
     symbol = raw_symbol.strip().upper()
     if not symbol:
@@ -797,6 +988,38 @@ def get_forecast_service_url() -> str | None:
 
 def is_forecast_service_auth_disabled() -> bool:
     return os.getenv("FORECAST_SERVICE_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def public_analysis_provider_type() -> str:
+    return normalize_market_data_provider(os.getenv("PUBLIC_ANALYSIS_PROVIDER", "yfinance"))
+
+
+def public_analysis_lookback_years() -> int:
+    raw_value = os.getenv("PUBLIC_ANALYSIS_LOOKBACK_YEARS")
+    if raw_value is None:
+        return DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS
+
+
+def public_analysis_prefix() -> str:
+    return os.getenv("PUBLIC_ANALYSIS_PREFIX", DEFAULT_PUBLIC_ANALYSIS_PREFIX).strip("/") or DEFAULT_PUBLIC_ANALYSIS_PREFIX
+
+
+def public_analysis_local_dir() -> Path:
+    configured = os.getenv("PUBLIC_ANALYSIS_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "drawdown-chart" / "public-analysis"
+    return Path.home() / ".drawdown-chart" / "public-analysis"
+
+
+def public_analysis_bucket_name() -> str | None:
+    return os.getenv("PUBLIC_ANALYSIS_BUCKET", "").strip() or None
 
 
 def verify_google_token(token: str) -> str:
@@ -1044,6 +1267,48 @@ def calculate_recovery_metrics(points: list[PricePoint]) -> RecoveryMetrics:
     )
 
 
+def calculate_current_drawdown_metrics(points: list[PricePoint]) -> CurrentDrawdownMetrics:
+    if not points:
+        raise ValueError("価格データが空です")
+
+    peak_point = points[0]
+    trough_point = points[0]
+    for point in points[1:]:
+        if point.price >= peak_point.price:
+            peak_point = point
+            trough_point = point
+            continue
+        if point.price < trough_point.price:
+            trough_point = point
+
+    latest_point = points[-1]
+    current_drawdown_pct = 0.0 if peak_point.price <= 0 else max(0.0, 1.0 - (latest_point.price / peak_point.price))
+    if current_drawdown_pct <= 1e-10:
+        current_drawdown_pct = 0.0
+        current_drawdown_days = 0
+        recovery_progress_pct = 1.0
+        status = "recovered"
+    else:
+        current_drawdown_days = date_distance(peak_point.date, latest_point.date)
+        recovery_span = peak_point.price - trough_point.price
+        if recovery_span <= 0:
+            recovery_progress_pct = 0.0
+        else:
+            recovery_progress_pct = (latest_point.price - trough_point.price) / recovery_span
+            recovery_progress_pct = max(0.0, min(recovery_progress_pct, 1.0))
+        status = "in_progress"
+
+    return CurrentDrawdownMetrics(
+        peak_date=peak_point.date,
+        trough_date=trough_point.date,
+        latest_price_date=latest_point.date,
+        current_drawdown_pct=round(current_drawdown_pct, 8),
+        current_drawdown_days=current_drawdown_days,
+        recovery_progress_pct=round(recovery_progress_pct, 8),
+        status=status,
+    )
+
+
 def unique_symbols(symbols: list[str]) -> list[tuple[str, str]]:
     seen: set[str] = set()
     unique: list[tuple[str, str]] = []
@@ -1122,20 +1387,138 @@ def create_cache_backend(backend_type: str) -> MarketDataCache:
     return MemoryMarketDataCache()
 
 
-def create_app(provider: MarketDataProvider | None = None, forecast_client: ForecastClient | None = None) -> FastAPI:
+def create_public_analysis_store() -> PublicAnalysisStore:
+    bucket = public_analysis_bucket_name()
+    if bucket:
+        return GCSPublicAnalysisStore(bucket, public_analysis_prefix())
+    return LocalFilePublicAnalysisStore(public_analysis_local_dir())
+
+
+def create_market_data_provider(provider_type: str | None = None) -> MarketDataProvider:
+    resolved_provider_type = normalize_market_data_provider(provider_type or os.getenv("MARKET_DATA_PROVIDER"))
+    if resolved_provider_type == "jquants":
+        return JQuantsMarketDataProvider()
+    return YFinanceMarketDataProvider()
+
+
+def jst_now() -> datetime:
+    from datetime import timezone
+
+    return datetime.now(timezone(timedelta(hours=9)))
+
+
+def jst_now_iso() -> str:
+    return jst_now().isoformat(timespec="seconds")
+
+
+def public_analysis_staged_key(snapshot_date: str) -> str:
+    return f"staged/{snapshot_date}.json"
+
+
+def is_public_analysis_snapshot_stale(
+    snapshot: PublicAnalysisSnapshot,
+    today: date | None = None,
+    max_age_days: int = DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS,
+) -> bool:
+    anchor_date = today or date.today()
+    snapshot_date = date.fromisoformat(snapshot.as_of_date)
+    return (anchor_date - snapshot_date).days > max_age_days
+
+
+def build_public_analysis_snapshot(
+    provider: MarketDataProvider | None = None,
+    nikkei_constituents: list[SecurityInfo] | None = None,
+    market_cap_ranking: list[RankedSecurity] | None = None,
+    generated_at: str | None = None,
+) -> PublicAnalysisSnapshot:
+    analysis_provider = provider or create_market_data_provider(public_analysis_provider_type())
+    universe_month, securities = build_public_analysis_universe(nikkei_constituents, market_cap_ranking)
+    provider_name = public_analysis_provider_type()
+    items: list[PublicAnalysisItem] = []
+
+    for security in securities:
+        symbol = normalize_japanese_symbol(security.code)
+        prices = analysis_provider.get_adjusted_close(
+            symbol,
+            f"{public_analysis_lookback_years()}y",
+        )
+        metrics = calculate_current_drawdown_metrics(prices)
+        items.append(
+            PublicAnalysisItem(
+                code=security.code,
+                name=security.name or get_local_security_name(security.code) or security.code,
+                current_drawdown_pct=metrics.current_drawdown_pct,
+                current_drawdown_days=metrics.current_drawdown_days,
+                recovery_progress_pct=metrics.recovery_progress_pct,
+                peak_date=metrics.peak_date,
+                trough_date=metrics.trough_date,
+                latest_price_date=metrics.latest_price_date,
+                status=metrics.status,
+            )
+        )
+
+    as_of_date = max((item.latest_price_date for item in items), default=date.today().isoformat())
+    return PublicAnalysisSnapshot(
+        as_of_date=as_of_date,
+        published_at=generated_at or jst_now_iso(),
+        provider=provider_name,
+        universe_month=universe_month,
+        item_count=len(items),
+        items=items,
+    )
+
+
+def refresh_public_analysis_snapshot(
+    store: PublicAnalysisStore | None = None,
+    provider: MarketDataProvider | None = None,
+    nikkei_constituents: list[SecurityInfo] | None = None,
+    market_cap_ranking: list[RankedSecurity] | None = None,
+    generated_at: str | None = None,
+) -> PublicAnalysisSnapshot:
+    snapshot = build_public_analysis_snapshot(
+        provider=provider,
+        nikkei_constituents=nikkei_constituents,
+        market_cap_ranking=market_cap_ranking,
+        generated_at=generated_at,
+    )
+    analysis_store = store or create_public_analysis_store()
+    analysis_store.save(public_analysis_staged_key(snapshot.as_of_date), snapshot.model_dump())
+    return snapshot
+
+
+def publish_public_analysis_snapshot(
+    store: PublicAnalysisStore | None = None,
+    snapshot_date: str | None = None,
+    published_at: str | None = None,
+) -> PublicAnalysisSnapshot | None:
+    analysis_store = store or create_public_analysis_store()
+    target_date = snapshot_date or date.today().isoformat()
+    staged_payload = analysis_store.load(public_analysis_staged_key(target_date))
+    if staged_payload is None:
+        return None
+    snapshot = PublicAnalysisSnapshot.model_validate(staged_payload)
+    live_snapshot = snapshot.model_copy(update={"published_at": published_at or jst_now_iso()})
+    analysis_store.save(PUBLIC_ANALYSIS_LIVE_KEY, live_snapshot.model_dump())
+    return live_snapshot
+
+
+def create_app(
+    provider: MarketDataProvider | None = None,
+    forecast_client: ForecastClient | None = None,
+    public_analysis_store: PublicAnalysisStore | None = None,
+) -> FastAPI:
     app = FastAPI(title="Stock Drawdown API", version="0.1.0")
     
     provider_type = normalize_market_data_provider(os.getenv("MARKET_DATA_PROVIDER"))
     if provider:
         market_data_provider = provider
-    elif provider_type == "jquants":
-        market_data_provider = JQuantsMarketDataProvider()
     else:
-        market_data_provider = YFinanceMarketDataProvider()
+        market_data_provider = create_market_data_provider(provider_type)
 
     cache_ttl_seconds = market_data_cache_ttl_seconds()
     cache_backend_type = os.getenv("MARKET_DATA_CACHE_BACKEND", "memory").lower()
     daily_cache = create_cache_backend(cache_backend_type)
+    configured_public_analysis_store = public_analysis_store
     forecast_service_url = get_forecast_service_url()
     configured_forecast_client = forecast_client
     if configured_forecast_client is None and forecast_service_url:
@@ -1296,6 +1679,21 @@ def create_app(provider: MarketDataProvider | None = None, forecast_client: Fore
             forecast_preview_enabled=is_forecast_preview_enabled(),
         )
 
+    @app.get("/api/public-analysis", response_model=PublicAnalysisResponse)
+    def public_analysis() -> PublicAnalysisResponse:
+        analysis_store = configured_public_analysis_store or create_public_analysis_store()
+        payload = analysis_store.load(PUBLIC_ANALYSIS_LIVE_KEY)
+        if payload is None:
+            return PublicAnalysisResponse(
+                snapshot=None,
+                stale=True,
+                message="公開ランキングはまだ集計されていません。",
+            )
+        snapshot = PublicAnalysisSnapshot.model_validate(payload)
+        stale = is_public_analysis_snapshot_stale(snapshot)
+        message = "公開ランキングは更新待ちです。前回集計分を表示しています。" if stale else None
+        return PublicAnalysisResponse(snapshot=snapshot, stale=stale, message=message)
+
     @app.get("/api/market-events", response_model=list[MarketEvent])
     def market_events(_: str | None = Depends(require_user)) -> list[MarketEvent]:
         return load_market_events()
@@ -1396,3 +1794,37 @@ def create_app(provider: MarketDataProvider | None = None, forecast_client: Fore
 
 
 app = create_app()
+
+
+def run_cli(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Stock drawdown maintenance tasks")
+    subparsers = parser.add_subparsers(dest="command")
+
+    refresh_parser = subparsers.add_parser("refresh-public-analysis", help="Build and stage the public analysis snapshot")
+    refresh_parser.add_argument("--generated-at", default=None)
+
+    publish_parser = subparsers.add_parser("publish-public-analysis", help="Promote the staged public analysis snapshot to live")
+    publish_parser.add_argument("--snapshot-date", default=None)
+    publish_parser.add_argument("--published-at", default=None)
+
+    args = parser.parse_args(argv)
+
+    if args.command == "refresh-public-analysis":
+        snapshot = refresh_public_analysis_snapshot(generated_at=args.generated_at)
+        print(json.dumps(snapshot.model_dump(), ensure_ascii=False))
+        return 0
+
+    if args.command == "publish-public-analysis":
+        snapshot = publish_public_analysis_snapshot(snapshot_date=args.snapshot_date, published_at=args.published_at)
+        if snapshot is None:
+            print("No staged snapshot found for publish target", file=sys.stderr)
+            return 1
+        print(json.dumps(snapshot.model_dump(), ensure_ascii=False))
+        return 0
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_cli())

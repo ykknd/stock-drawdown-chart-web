@@ -101,6 +101,19 @@ function formatDateDisplay(value) {
   return value;
 }
 
+function formatDateTimeDisplay(value) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
 function formatDays(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return `${value}日`;
@@ -977,7 +990,149 @@ function DrawdownPreviewFigure() {
   );
 }
 
-function PublicLandingPage({ authError, onEnterApp }) {
+function PublicAnalysisSection({ publicAnalysis, loading }) {
+  const snapshot = publicAnalysis?.snapshot || null;
+  const [sortKey, setSortKey] = useState("current_drawdown_pct");
+  const [sortDirection, setSortDirection] = useState("desc");
+  const rows = snapshot?.items || [];
+  const sortedRows = useMemo(() => {
+    const multiplier = sortDirection === "asc" ? 1 : -1;
+    return [...rows].sort((left, right) => {
+      const leftValue = left?.[sortKey] ?? 0;
+      const rightValue = right?.[sortKey] ?? 0;
+      if (leftValue === rightValue) {
+        return String(left.code || "").localeCompare(String(right.code || ""), "ja");
+      }
+      return leftValue > rightValue ? multiplier : -multiplier;
+    });
+  }, [rows, sortDirection, sortKey]);
+
+  function onSort(nextKey) {
+    if (sortKey === nextKey) {
+      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection("desc");
+  }
+
+  const providerNote =
+    snapshot?.provider === "yfinance"
+      ? "価格データは yfinance による暫定集計です。公開運用の恒久データ源ではありません。"
+      : `価格データ提供元: ${snapshot?.provider || "-"}`;
+
+  return h(
+    "section",
+    { className: "public-analysis-section" },
+    h(
+      "div",
+      { className: "public-analysis-head" },
+      h(
+        "div",
+        null,
+        h("p", { className: "eyebrow" }, "公開ランキング"),
+        h("h2", null, "日経225採用銘柄の公開暴落ランキング"),
+        h(
+          "p",
+          { className: "public-analysis-lead" },
+          "手動管理の日経225構成銘柄と月次の時価総額上位リストをもとに、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
+        )
+      ),
+      h(
+        "div",
+        { className: "public-analysis-meta" },
+        h("span", null, snapshot ? `更新: ${formatDateTimeDisplay(snapshot.published_at)}` : "更新: 未集計"),
+        h("span", null, snapshot ? `対象: ${snapshot.item_count}銘柄` : "対象: -"),
+        h("span", null, snapshot?.universe_month ? `母集団月: ${snapshot.universe_month}` : "母集団月: -")
+      )
+    ),
+    h(
+      "div",
+      { className: "public-analysis-notes" },
+      h("p", null, "指標の見方: 暴落率は直近5年高値からの下落率、暴落期間はその高値を更新できていない日数、回復度合いは底値から高値までに対する戻り率です。"),
+      h("p", null, providerNote)
+    ),
+    publicAnalysis?.message ? h("div", { className: `notice${publicAnalysis?.stale ? " public-analysis-stale" : ""}` }, publicAnalysis.message) : null,
+    loading && !snapshot
+      ? h("div", { className: "public-analysis-empty" }, "公開ランキングを読み込み中です")
+      : !snapshot
+        ? h("div", { className: "public-analysis-empty" }, "公開ランキングはまだ集計されていません")
+        : h(
+            "div",
+            { className: "public-analysis-table-wrap" },
+            h(
+              "table",
+              { className: "public-analysis-table" },
+              h(
+                "thead",
+                null,
+                h(
+                  "tr",
+                  null,
+                  h("th", null, "銘柄コード"),
+                  h("th", null, "銘柄名"),
+                  h(
+                    "th",
+                    null,
+                    h(
+                      "button",
+                      { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_pct") },
+                      `暴落率${sortKey === "current_drawdown_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
+                    )
+                  ),
+                  h(
+                    "th",
+                    null,
+                    h(
+                      "button",
+                      { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_days") },
+                      `暴落期間${sortKey === "current_drawdown_days" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
+                    )
+                  ),
+                  h(
+                    "th",
+                    null,
+                    h(
+                      "button",
+                      { type: "button", className: "sort-button", onClick: () => onSort("recovery_progress_pct") },
+                      `回復度合い${sortKey === "recovery_progress_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
+                    )
+                  ),
+                  h("th", null, "状態")
+                )
+              ),
+              h(
+                "tbody",
+                null,
+                sortedRows.map((row) =>
+                  h(
+                    "tr",
+                    { key: row.code },
+                    h("td", null, row.code),
+                    h("td", { className: "public-analysis-name" }, row.name),
+                    h("td", null, formatPercent(row.current_drawdown_pct)),
+                    h("td", null, formatDays(row.current_drawdown_days)),
+                    h("td", null, formatPercent(row.recovery_progress_pct)),
+                    h(
+                      "td",
+                      null,
+                      h(
+                        "span",
+                        {
+                          className: `public-analysis-status ${row.status === "recovered" ? "is-recovered" : "is-progress"}`,
+                        },
+                        row.status === "recovered" ? "回復済み" : "進行中"
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+  );
+}
+
+function PublicLandingPage({ authError, onEnterApp, publicAnalysis, publicAnalysisLoading }) {
   return h(
     "main",
     { className: "app-shell public-shell" },
@@ -1022,6 +1177,7 @@ function PublicLandingPage({ authError, onEnterApp }) {
           h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替")),
           h("div", null, h("strong", null, "時系列予測 preview"), h("span", null, "日足のみ / TimesFMで14営業日先のDDを試算"))
         ),
+        h(PublicAnalysisSection, { publicAnalysis, loading: publicAnalysisLoading }),
         h(HelpPage),
         h(PrivacyFooter, { publicFooter: true })
       ),
@@ -1135,6 +1291,8 @@ function App() {
   const [authToken, setAuthToken] = useState("");
   const [authError, setAuthError] = useState("");
   const [showPublicLanding, setShowPublicLanding] = useState(false);
+  const [publicAnalysis, setPublicAnalysis] = useState({ snapshot: null, stale: true, message: "" });
+  const [publicAnalysisLoading, setPublicAnalysisLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1223,6 +1381,21 @@ function App() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    setPublicAnalysisLoading(true);
+    fetch("/api/public-analysis")
+      .then((response) => (response.ok ? response.json() : { snapshot: null, stale: true, message: "公開ランキングの取得に失敗しました。" }))
+      .then((payload) =>
+        setPublicAnalysis({
+          snapshot: payload?.snapshot || null,
+          stale: Boolean(payload?.stale),
+          message: payload?.message || "",
+        })
+      )
+      .catch(() => setPublicAnalysis({ snapshot: null, stale: true, message: "公開ランキングの取得に失敗しました。" }))
+      .finally(() => setPublicAnalysisLoading(false));
+  }, []);
 
   useEffect(() => {
     fetch("/api/config")
@@ -1460,6 +1633,8 @@ function App() {
     return h(PublicLandingPage, {
       authError,
       onEnterApp: !appConfig.enabled ? enterAppFromPublicLanding : null,
+      publicAnalysis,
+      publicAnalysisLoading,
     });
   }
 

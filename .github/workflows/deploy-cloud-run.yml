@@ -184,7 +184,7 @@ jobs:
 
       - name: Deploy web service
         run: |
-          ENV_VARS="APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }},FORECAST_PREVIEW_ENABLED=${{ vars.FORECAST_PREVIEW_ENABLED }},FORECAST_SERVICE_URL=${{ needs.deploy-forecast.outputs.forecast_url }}"
+          ENV_VARS="APP_AUTH_ENABLED=true,GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},MARKET_DATA_PROVIDER=${{ vars.MARKET_DATA_PROVIDER }},MARKET_DATA_CACHE_BACKEND=${{ vars.MARKET_DATA_CACHE_BACKEND }},MARKET_DATA_CACHE_GCS_BUCKET=${{ vars.MARKET_DATA_CACHE_GCS_BUCKET }},MARKET_DATA_CACHE_GCS_PREFIX=${{ vars.MARKET_DATA_CACHE_GCS_PREFIX }},FORECAST_PREVIEW_ENABLED=${{ vars.FORECAST_PREVIEW_ENABLED }},FORECAST_SERVICE_URL=${{ needs.deploy-forecast.outputs.forecast_url }},PUBLIC_ANALYSIS_BUCKET=${{ vars.PUBLIC_ANALYSIS_BUCKET }},PUBLIC_ANALYSIS_PREFIX=${{ vars.PUBLIC_ANALYSIS_PREFIX || 'public-analysis' }},PUBLIC_ANALYSIS_LOOKBACK_YEARS=${{ vars.PUBLIC_ANALYSIS_LOOKBACK_YEARS || '5' }},PUBLIC_ANALYSIS_PROVIDER=${{ vars.PUBLIC_ANALYSIS_PROVIDER || 'yfinance' }}"
           if [ -n "${{ secrets.ALLOWED_EMAIL }}" ]; then
             ENV_VARS="$ENV_VARS,ALLOWED_EMAIL=${{ secrets.ALLOWED_EMAIL }}"
           fi
@@ -200,3 +200,25 @@ jobs:
             --cpu "${{ vars.WEB_CPU || '1' }}" \
             --service-account "${{ vars.WEB_RUNTIME_SERVICE_ACCOUNT }}" \
             --set-env-vars "$ENV_VARS"
+
+      - name: Update public analysis Cloud Run jobs
+        run: |
+          JOB_ENV_VARS="PUBLIC_ANALYSIS_BUCKET=${{ vars.PUBLIC_ANALYSIS_BUCKET }},PUBLIC_ANALYSIS_PREFIX=${{ vars.PUBLIC_ANALYSIS_PREFIX || 'public-analysis' }},PUBLIC_ANALYSIS_LOOKBACK_YEARS=${{ vars.PUBLIC_ANALYSIS_LOOKBACK_YEARS || '5' }},PUBLIC_ANALYSIS_PROVIDER=${{ vars.PUBLIC_ANALYSIS_PROVIDER || 'yfinance' }}"
+
+          gcloud run jobs update "${{ vars.PUBLIC_ANALYSIS_REFRESH_JOB }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
+            --image "$WEB_IMAGE" \
+            --service-account "${{ vars.WEB_RUNTIME_SERVICE_ACCOUNT }}" \
+            --command python \
+            --args stock_drawdown_app.py,refresh-public-analysis \
+            --set-env-vars "$JOB_ENV_VARS"
+
+          gcloud run jobs update "${{ vars.PUBLIC_ANALYSIS_PUBLISH_JOB }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
+            --image "$WEB_IMAGE" \
+            --service-account "${{ vars.WEB_RUNTIME_SERVICE_ACCOUNT }}" \
+            --command python \
+            --args stock_drawdown_app.py,publish-public-analysis \
+            --set-env-vars "$JOB_ENV_VARS"

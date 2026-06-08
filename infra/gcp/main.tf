@@ -5,14 +5,18 @@ locals {
   artifact_repository_id          = coalesce(var.artifact_repository_id, "stock-drawdown${local.environment_suffix}")
   forecast_artifact_repository_id = coalesce(var.forecast_artifact_repository_id, "stock-drawdown-forecast${local.environment_suffix}")
   cache_bucket_name               = coalesce(var.cache_bucket_name, "${var.project_id}-stock-drawdown-cache${local.environment_suffix}")
+  public_analysis_bucket_name     = coalesce(var.public_analysis_bucket_name, "${var.project_id}-stock-drawdown-public-analysis${local.environment_suffix}")
   deploy_service_account_id       = coalesce(var.deploy_service_account_id, "github-actions-deploy${local.environment_suffix}")
   cloud_build_service_account_id  = coalesce(var.cloud_build_service_account_id, "stock-drawdown-build${local.environment_suffix}")
   runtime_service_account_id      = coalesce(var.runtime_service_account_id, "stock-drawdown-runtime${local.environment_suffix}")
+  scheduler_service_account_id    = coalesce(var.scheduler_service_account_id, "stock-dd-scheduler${local.environment_suffix}")
   forecast_runtime_service_account_id = coalesce(
     var.forecast_runtime_service_account_id,
     "stock-dd-forecast-rt${local.environment_suffix}"
   )
   forecast_service_name        = coalesce(var.forecast_service_name, "stock-drawdown-forecast-api${local.environment_suffix}")
+  public_analysis_refresh_job_name = coalesce(var.public_analysis_refresh_job_name, "stock-drawdown-public-analysis-refresh${local.environment_suffix}")
+  public_analysis_publish_job_name = coalesce(var.public_analysis_publish_job_name, "stock-drawdown-public-analysis-publish${local.environment_suffix}")
   forecast_memory              = coalesce(var.forecast_memory, local.environment == "staging" ? "4Gi" : "2Gi")
   github_repository            = "${var.github_owner}/${var.github_repo}"
   workload_identity_ref_prefix = local.environment == "staging" ? "refs/tags/stg-v" : "refs/tags/v"
@@ -20,6 +24,7 @@ locals {
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -90,6 +95,31 @@ resource "google_storage_bucket" "market_data_cache" {
   ]
 }
 
+resource "google_storage_bucket" "public_analysis" {
+  project                     = var.project_id
+  name                        = local.public_analysis_bucket_name
+  location                    = var.public_analysis_bucket_location
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+
+    condition {
+      age = var.public_analysis_lifecycle_age_days
+      matches_prefix = [
+        "public-analysis/staged/",
+      ]
+    }
+  }
+
+  depends_on = [
+    google_project_service.required["storage.googleapis.com"],
+  ]
+}
+
 resource "google_service_account" "deploy" {
   project      = var.project_id
   account_id   = local.deploy_service_account_id
@@ -114,6 +144,16 @@ resource "google_service_account" "runtime" {
   project      = var.project_id
   account_id   = local.runtime_service_account_id
   display_name = "Stock Drawdown Cloud Run runtime"
+
+  depends_on = [
+    google_project_service.required["iam.googleapis.com"],
+  ]
+}
+
+resource "google_service_account" "scheduler" {
+  project      = var.project_id
+  account_id   = local.scheduler_service_account_id
+  display_name = "Stock Drawdown Cloud Scheduler"
 
   depends_on = [
     google_project_service.required["iam.googleapis.com"],
@@ -180,6 +220,178 @@ resource "google_storage_bucket_iam_member" "runtime_cache_object_admin" {
   bucket = google_storage_bucket.market_data_cache.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_storage_bucket_iam_member" "runtime_public_analysis_object_admin" {
+  bucket = google_storage_bucket.public_analysis.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_cloud_run_v2_job" "public_analysis_refresh" {
+  project  = var.project_id
+  location = var.region
+  name     = local.public_analysis_refresh_job_name
+
+  template {
+    template {
+      service_account = google_service_account.runtime.email
+
+      containers {
+        image   = var.web_bootstrap_image
+        command = ["python"]
+        args    = ["stock_drawdown_app.py", "refresh-public-analysis"]
+
+        env {
+          name  = "PUBLIC_ANALYSIS_BUCKET"
+          value = google_storage_bucket.public_analysis.name
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_PREFIX"
+          value = "public-analysis"
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_LOOKBACK_YEARS"
+          value = "5"
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_PROVIDER"
+          value = "yfinance"
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required["run.googleapis.com"],
+  ]
+}
+
+resource "google_cloud_run_v2_job" "public_analysis_publish" {
+  project  = var.project_id
+  location = var.region
+  name     = local.public_analysis_publish_job_name
+
+  template {
+    template {
+      service_account = google_service_account.runtime.email
+
+      containers {
+        image   = var.web_bootstrap_image
+        command = ["python"]
+        args    = ["stock_drawdown_app.py", "publish-public-analysis"]
+
+        env {
+          name  = "PUBLIC_ANALYSIS_BUCKET"
+          value = google_storage_bucket.public_analysis.name
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_PREFIX"
+          value = "public-analysis"
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_LOOKBACK_YEARS"
+          value = "5"
+        }
+
+        env {
+          name  = "PUBLIC_ANALYSIS_PROVIDER"
+          value = "yfinance"
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+    ]
+  }
+
+  depends_on = [
+    google_project_service.required["run.googleapis.com"],
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_can_run_public_analysis_refresh" {
+  project  = google_cloud_run_v2_job.public_analysis_refresh.project
+  location = google_cloud_run_v2_job.public_analysis_refresh.location
+  name     = google_cloud_run_v2_job.public_analysis_refresh.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_can_run_public_analysis_publish" {
+  project  = google_cloud_run_v2_job.public_analysis_publish.project
+  location = google_cloud_run_v2_job.public_analysis_publish.location
+  name     = google_cloud_run_v2_job.public_analysis_publish.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
+resource "google_cloud_scheduler_job" "public_analysis_refresh" {
+  project   = var.project_id
+  region    = var.region
+  name      = "${local.public_analysis_refresh_job_name}-weekday-1800"
+  schedule  = "0 18 * * 1-5"
+  time_zone = "Asia/Tokyo"
+
+  http_target {
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.public_analysis_refresh.name}:run"
+    http_method = "POST"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
+}
+
+resource "google_cloud_scheduler_job" "public_analysis_publish_2000" {
+  project   = var.project_id
+  region    = var.region
+  name      = "${local.public_analysis_publish_job_name}-weekday-2000"
+  schedule  = "0 20 * * 1-5"
+  time_zone = "Asia/Tokyo"
+
+  http_target {
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.public_analysis_publish.name}:run"
+    http_method = "POST"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
+}
+
+resource "google_cloud_scheduler_job" "public_analysis_publish_2400" {
+  project   = var.project_id
+  region    = var.region
+  name      = "${local.public_analysis_publish_job_name}-weekday-2400"
+  schedule  = "0 0 * * 2-6"
+  time_zone = "Asia/Tokyo"
+
+  http_target {
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.public_analysis_publish.name}:run"
+    http_method = "POST"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
 }
 
 resource "google_cloud_run_v2_service" "forecast" {
