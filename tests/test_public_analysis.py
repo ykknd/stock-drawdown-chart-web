@@ -134,6 +134,35 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
     assert staged_payload["items"][0]["code"] == "7203"
 
 
+def test_public_analysis_snapshot_normalizes_percentage_point_values():
+    snapshot = PublicAnalysisSnapshot.model_validate(
+        {
+            "as_of_date": "2026-06-09",
+            "published_at": "2026-06-09T20:00:00+09:00",
+            "provider": "yfinance",
+            "universe_month": "2026-06",
+            "item_count": 1,
+            "items": [
+                {
+                    "code": "7203",
+                    "name": "トヨタ自動車",
+                    "current_drawdown_pct": 12.4,
+                    "current_drawdown_days": 47,
+                    "recovery_progress_pct": 68.2,
+                    "peak_date": "2026-04-15",
+                    "trough_date": "2026-05-20",
+                    "latest_price_date": "2026-06-09",
+                    "status": "in_progress",
+                }
+            ],
+        }
+    )
+
+    item = snapshot.items[0]
+    assert item.current_drawdown_pct == 0.124
+    assert item.recovery_progress_pct == 0.682
+
+
 def test_publish_public_analysis_snapshot_promotes_staged_version_and_keeps_live_when_missing():
     store = MemoryPublicAnalysisStore()
     staged = PublicAnalysisSnapshot(

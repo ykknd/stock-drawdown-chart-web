@@ -119,6 +119,10 @@ function formatDays(value) {
   return `${value}日`;
 }
 
+function isRecoveredPublicAnalysisStatus(status) {
+  return status === "recovered" || status === "回復済" || status === "回復済み";
+}
+
 function parseSymbols(value) {
   return value
     .split(/[\s,、]+/)
@@ -1016,11 +1020,6 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
     setSortDirection("desc");
   }
 
-  const providerNote =
-    snapshot?.provider === "yfinance"
-      ? "価格データは yfinance による暫定集計です。公開運用の恒久データ源ではありません。"
-      : `価格データ提供元: ${snapshot?.provider || "-"}`;
-
   return h(
     "section",
     { className: "public-analysis-section" },
@@ -1035,7 +1034,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         h(
           "p",
           { className: "public-analysis-lead" },
-          "手動管理の日経225構成銘柄と月次の時価総額上位リストをもとに、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
+          "先月末の日経225構成銘柄と月次の時価総額上位リストをもとに、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
         )
       ),
       h(
@@ -1049,8 +1048,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
     h(
       "div",
       { className: "public-analysis-notes" },
-      h("p", null, "指標の見方: 暴落率は直近5年高値からの下落率、暴落期間はその高値を更新できていない日数、回復度合いは底値から高値までに対する戻り率です。"),
-      h("p", null, providerNote)
+      h("p", null, "指標の見方: 暴落率は直近5年高値からの下落率、暴落期間はその高値を更新できていない日数、回復度合いは底値から高値までに対する戻り率です。")
     ),
     publicAnalysis?.message ? h("div", { className: `notice${publicAnalysis?.stale ? " public-analysis-stale" : ""}` }, publicAnalysis.message) : null,
     loading && !snapshot
@@ -1059,74 +1057,86 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         ? h("div", { className: "public-analysis-empty" }, "公開ランキングはまだ集計されていません")
         : h(
             "div",
-            { className: "public-analysis-table-wrap" },
+            { className: "public-analysis-results" },
             h(
-              "table",
-              { className: "public-analysis-table" },
+              "div",
+              { className: "public-analysis-table-wrap" },
               h(
-                "thead",
-                null,
+                "table",
+                { className: "public-analysis-table" },
                 h(
-                  "tr",
+                  "thead",
                   null,
-                  h("th", null, "銘柄コード"),
-                  h("th", null, "銘柄名"),
-                  h(
-                    "th",
-                    null,
-                    h(
-                      "button",
-                      { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_pct") },
-                      `暴落率${sortKey === "current_drawdown_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
-                    )
-                  ),
-                  h(
-                    "th",
-                    null,
-                    h(
-                      "button",
-                      { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_days") },
-                      `暴落期間${sortKey === "current_drawdown_days" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
-                    )
-                  ),
-                  h(
-                    "th",
-                    null,
-                    h(
-                      "button",
-                      { type: "button", className: "sort-button", onClick: () => onSort("recovery_progress_pct") },
-                      `回復度合い${sortKey === "recovery_progress_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
-                    )
-                  ),
-                  h("th", null, "状態")
-                )
-              ),
-              h(
-                "tbody",
-                null,
-                sortedRows.map((row) =>
                   h(
                     "tr",
-                    { key: row.code },
-                    h("td", null, row.code),
-                    h("td", { className: "public-analysis-name" }, row.name),
-                    h("td", null, formatPercent(row.current_drawdown_pct)),
-                    h("td", null, formatDays(row.current_drawdown_days)),
-                    h("td", null, formatPercent(row.recovery_progress_pct)),
+                    null,
+                    h("th", null, "銘柄コード"),
+                    h("th", null, "銘柄名"),
                     h(
-                      "td",
+                      "th",
                       null,
                       h(
-                        "span",
-                        {
-                          className: `public-analysis-status ${row.status === "recovered" ? "is-recovered" : "is-progress"}`,
-                        },
-                        row.status === "recovered" ? "回復済み" : "進行中"
+                        "button",
+                        { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_pct") },
+                        `暴落率${sortKey === "current_drawdown_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
                       )
-                    )
+                    ),
+                    h(
+                      "th",
+                      null,
+                      h(
+                        "button",
+                        { type: "button", className: "sort-button", onClick: () => onSort("current_drawdown_days") },
+                        `暴落期間${sortKey === "current_drawdown_days" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
+                      )
+                    ),
+                    h(
+                      "th",
+                      null,
+                      h(
+                        "button",
+                        { type: "button", className: "sort-button", onClick: () => onSort("recovery_progress_pct") },
+                        `回復度合い${sortKey === "recovery_progress_pct" ? ` ${sortDirection === "desc" ? "▼" : "▲"}` : ""}`
+                      )
+                    ),
+                    h("th", null, "状態")
+                  )
+                ),
+                h(
+                  "tbody",
+                  null,
+                  sortedRows.map((row) =>
+                    {
+                      const recovered = isRecoveredPublicAnalysisStatus(row.status);
+                      return h(
+                        "tr",
+                        { key: row.code },
+                        h("td", null, row.code),
+                        h("td", { className: "public-analysis-name" }, row.name),
+                        h("td", null, formatPercent(row.current_drawdown_pct)),
+                        h("td", null, formatDays(row.current_drawdown_days)),
+                        h("td", null, formatPercent(row.recovery_progress_pct)),
+                        h(
+                          "td",
+                          null,
+                          h(
+                            "span",
+                            {
+                              className: `public-analysis-status ${recovered ? "is-recovered" : "is-progress"}`,
+                            },
+                            recovered ? "回復済" : "未回復"
+                          )
+                        )
+                      );
+                    }
                   )
                 )
               )
+            ),
+            h(
+              "p",
+              { className: "public-analysis-footnote" },
+              "備考: 状態は、暴落率が0%で直近5年高値を回復している銘柄を「回復済」、それ以外を「未回復」としています。暴落期間が5年の観測期間に達している銘柄は、基準となる高値が観測開始時点に近く、暴落率の解釈に注意が必要です。分析結果には誤りが含まれる可能性があり、投資の最終判断は投資家本人が行ってください。"
             )
           )
   );

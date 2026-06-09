@@ -710,6 +710,11 @@ h1 {
   overflow-x: auto;
 }
 
+.public-analysis-results {
+  display: grid;
+  gap: 10px;
+}
+
 .public-analysis-table {
   width: 100%;
   border-collapse: collapse;
@@ -765,6 +770,12 @@ h1 {
 .public-analysis-status.is-recovered {
   background: #edf7f3;
   color: #1d6c50;
+}
+
+.public-analysis-footnote {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
 }
 
 .public-privacy-footer {

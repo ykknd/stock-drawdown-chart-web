@@ -16,7 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 SUPPORTED_PERIODS = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max", "custom"}
@@ -136,6 +136,14 @@ class PublicAnalysisItem(BaseModel):
     trough_date: str
     latest_price_date: str
     status: str
+
+    @field_validator("current_drawdown_pct", "recovery_progress_pct", mode="before")
+    @classmethod
+    def normalize_public_ratio(cls, value: float) -> float:
+        numeric = float(value)
+        if numeric > 1.0:
+            return numeric / 100.0
+        return numeric
 
 
 class PublicAnalysisSnapshot(BaseModel):
