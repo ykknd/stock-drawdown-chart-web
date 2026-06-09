@@ -93,11 +93,14 @@ def test_build_public_analysis_universe_intersects_only_nikkei_members():
 
 
 class FakeProvider:
-    def __init__(self, by_symbol: dict[str, list[PricePoint]]) -> None:
+    def __init__(self, by_symbol: dict[str, list[PricePoint]], failing_symbols: set[str] | None = None) -> None:
         self.by_symbol = by_symbol
+        self.failing_symbols = failing_symbols or set()
 
     def get_adjusted_close(self, symbol, period, custom_months=None, api_key=None, jquants_free_tier=True):
         assert period == "5y"
+        if symbol in self.failing_symbols:
+            raise ValueError(f"{symbol} unavailable")
         return self.by_symbol[symbol]
 
     def get_security_name(self, symbol, api_key=None):
@@ -132,6 +135,66 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
     assert staged_payload is not None
     assert "market_cap" not in str(staged_payload)
     assert staged_payload["items"][0]["code"] == "7203"
+
+
+def test_refresh_public_analysis_snapshot_skips_failed_symbols_below_threshold():
+    store = MemoryPublicAnalysisStore()
+    provider = FakeProvider(
+        {
+            "7203.T": price_points([100.0, 90.0, 80.0]),
+            "6758.T": price_points([100.0, 80.0, 90.0]),
+        },
+        failing_symbols={"9613.T"},
+    )
+
+    snapshot = refresh_public_analysis_snapshot(
+        store=store,
+        provider=provider,
+        nikkei_constituents=[
+            SecurityInfo(code="7203", name="トヨタ自動車"),
+            SecurityInfo(code="6758", name="ソニーグループ"),
+            SecurityInfo(code="9613", name="NTTデータグループ"),
+        ],
+        market_cap_ranking=[
+            RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車"),
+            RankedSecurity(universe_month="2026-05", rank=2, code="6758", name="ソニーグループ"),
+            RankedSecurity(universe_month="2026-05", rank=3, code="9613", name="NTTデータグループ"),
+        ],
+        generated_at="2026-06-08T18:00:00+09:00",
+    )
+
+    assert snapshot.item_count == 2
+    assert [item.code for item in snapshot.items] == ["7203", "6758"]
+
+
+def test_refresh_public_analysis_snapshot_raises_when_failures_reach_threshold():
+    store = MemoryPublicAnalysisStore()
+    failing_symbols = {f"{code}.T" for code in range(9000, 9010)}
+    provider = FakeProvider(
+        {
+            "7203.T": price_points([100.0, 90.0, 80.0]),
+        },
+        failing_symbols=failing_symbols,
+    )
+
+    nikkei_constituents = [SecurityInfo(code="7203", name="トヨタ自動車")]
+    market_cap_ranking = [RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車")]
+    for rank, code in enumerate(range(9000, 9010), start=2):
+        code_text = str(code)
+        nikkei_constituents.append(SecurityInfo(code=code_text, name=code_text))
+        market_cap_ranking.append(RankedSecurity(universe_month="2026-05", rank=rank, code=code_text, name=code_text))
+
+    try:
+        refresh_public_analysis_snapshot(
+            store=store,
+            provider=provider,
+            nikkei_constituents=nikkei_constituents,
+            market_cap_ranking=market_cap_ranking,
+            generated_at="2026-06-08T18:00:00+09:00",
+        )
+        assert False, "expected threshold failure"
+    except ValueError as exc:
+        assert "しきい値 10 件以上" in str(exc)
 
 
 def test_public_analysis_snapshot_normalizes_percentage_point_values():

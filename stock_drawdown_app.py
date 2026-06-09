@@ -43,6 +43,7 @@ DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS = 5
 DEFAULT_PUBLIC_ANALYSIS_PREFIX = "public-analysis"
 DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
 DEFAULT_PUBLIC_ANALYSIS_LIMIT = 100
+DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES = 10
 PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
 auth_scheme = HTTPBearer(auto_error=False)
 
@@ -1443,14 +1444,20 @@ def build_public_analysis_snapshot(
     universe_month, securities = build_public_analysis_universe(nikkei_constituents, market_cap_ranking)
     provider_name = public_analysis_provider_type()
     items: list[PublicAnalysisItem] = []
+    failed_symbols: list[str] = []
 
     for security in securities:
         symbol = normalize_japanese_symbol(security.code)
-        prices = analysis_provider.get_adjusted_close(
-            symbol,
-            f"{public_analysis_lookback_years()}y",
-        )
-        metrics = calculate_current_drawdown_metrics(prices)
+        try:
+            prices = analysis_provider.get_adjusted_close(
+                symbol,
+                f"{public_analysis_lookback_years()}y",
+            )
+            metrics = calculate_current_drawdown_metrics(prices)
+        except Exception as exc:
+            print(f"public-analysis skipped {symbol}: {exc}", file=sys.stderr)
+            failed_symbols.append(symbol)
+            continue
         items.append(
             PublicAnalysisItem(
                 code=security.code,
@@ -1463,6 +1470,14 @@ def build_public_analysis_snapshot(
                 latest_price_date=metrics.latest_price_date,
                 status=metrics.status,
             )
+        )
+
+    if not items:
+        raise ValueError("公開分析の集計に成功した銘柄がありません")
+
+    if len(failed_symbols) >= DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES:
+        raise ValueError(
+            f"公開分析の取得失敗が {len(failed_symbols)} 件でしきい値 {DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES} 件以上です: {', '.join(failed_symbols)}"
         )
 
     as_of_date = max((item.latest_price_date for item in items), default=date.today().isoformat())
