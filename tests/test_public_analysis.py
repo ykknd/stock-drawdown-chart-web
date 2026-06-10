@@ -130,7 +130,7 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
         generated_at="2026-06-08T18:00:00+09:00",
     )
 
-    staged_payload = store.load(public_analysis_staged_key(snapshot.as_of_date))
+    staged_payload = store.load(public_analysis_staged_key("2026-06-08"))
     assert snapshot.item_count == 2
     assert staged_payload is not None
     assert "market_cap" not in str(staged_payload)
@@ -246,6 +246,25 @@ def test_publish_public_analysis_snapshot_promotes_staged_version_and_keeps_live
     missing = publish_public_analysis_snapshot(store=store, snapshot_date="2026-06-09", published_at="2026-06-09T20:00:00+09:00")
     assert missing is None
     assert store.load(PUBLIC_ANALYSIS_LIVE_KEY) == previous_live
+
+
+def test_publish_public_analysis_snapshot_uses_run_date_by_default():
+    store = MemoryPublicAnalysisStore()
+    staged = PublicAnalysisSnapshot(
+        as_of_date="2026-06-09",
+        published_at="2026-06-10T18:00:00+09:00",
+        provider="yfinance",
+        universe_month="2026-05",
+        item_count=1,
+        items=[],
+    )
+    store.save(public_analysis_staged_key("2026-06-10"), staged.model_dump())
+
+    live = publish_public_analysis_snapshot(store=store, published_at="2026-06-10T20:00:00+09:00")
+
+    assert live is not None
+    assert live.as_of_date == "2026-06-09"
+    assert store.load(PUBLIC_ANALYSIS_LIVE_KEY)["published_at"] == "2026-06-10T20:00:00+09:00"
 
 
 def test_public_analysis_api_is_unauthenticated_and_reports_stale_flag():

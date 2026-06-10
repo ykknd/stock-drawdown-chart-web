@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -1411,13 +1411,27 @@ def create_market_data_provider(provider_type: str | None = None) -> MarketDataP
 
 
 def jst_now() -> datetime:
-    from datetime import timezone
-
     return datetime.now(timezone(timedelta(hours=9)))
 
 
 def jst_now_iso() -> str:
     return jst_now().isoformat(timespec="seconds")
+
+
+def public_analysis_run_date(timestamp: str | None = None) -> str:
+    if timestamp is None:
+        return jst_now().date().isoformat()
+
+    normalized = timestamp.strip()
+    if not normalized:
+        return jst_now().date().isoformat()
+    if len(normalized) == 10:
+        return date.fromisoformat(normalized).isoformat()
+
+    parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.date().isoformat()
+    return parsed.astimezone(timezone(timedelta(hours=9))).date().isoformat()
 
 
 def public_analysis_staged_key(snapshot_date: str) -> str:
@@ -1505,7 +1519,7 @@ def refresh_public_analysis_snapshot(
         generated_at=generated_at,
     )
     analysis_store = store or create_public_analysis_store()
-    analysis_store.save(public_analysis_staged_key(snapshot.as_of_date), snapshot.model_dump())
+    analysis_store.save(public_analysis_staged_key(public_analysis_run_date(generated_at)), snapshot.model_dump())
     return snapshot
 
 
@@ -1515,7 +1529,7 @@ def publish_public_analysis_snapshot(
     published_at: str | None = None,
 ) -> PublicAnalysisSnapshot | None:
     analysis_store = store or create_public_analysis_store()
-    target_date = snapshot_date or date.today().isoformat()
+    target_date = snapshot_date or public_analysis_run_date(published_at)
     staged_payload = analysis_store.load(public_analysis_staged_key(target_date))
     if staged_payload is None:
         return None
