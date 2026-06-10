@@ -54,6 +54,24 @@ variable "cache_bucket_location" {
   default     = "ASIA-NORTHEAST1"
 }
 
+variable "public_analysis_bucket_name" {
+  description = "Cloud Storage bucket name for published public analysis snapshots. Defaults to <project_id>-stock-drawdown-public-analysis."
+  type        = string
+  default     = null
+}
+
+variable "public_analysis_bucket_location" {
+  description = "Cloud Storage bucket location for public analysis snapshots."
+  type        = string
+  default     = "ASIA-NORTHEAST1"
+}
+
+variable "public_analysis_lifecycle_age_days" {
+  description = "Delete staged public analysis objects older than this many days."
+  type        = number
+  default     = 30
+}
+
 variable "cache_lifecycle_age_days" {
   description = "Delete cache objects older than this many days."
   type        = number
@@ -90,6 +108,12 @@ variable "runtime_service_account_id" {
   default     = null
 }
 
+variable "scheduler_service_account_id" {
+  description = "Service account ID used by Cloud Scheduler to trigger Cloud Run jobs."
+  type        = string
+  default     = null
+}
+
 variable "forecast_runtime_service_account_id" {
   description = "Service account ID used by the forecast Cloud Run runtime. Defaults to an environment-aware standard name."
   type        = string
@@ -98,6 +122,24 @@ variable "forecast_runtime_service_account_id" {
 
 variable "forecast_service_name" {
   description = "Cloud Run service name for TimesFM inference. Defaults to an environment-aware standard name."
+  type        = string
+  default     = null
+}
+
+variable "web_bootstrap_image" {
+  description = "Initial image used when Terraform creates the public analysis Cloud Run jobs."
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
+variable "public_analysis_refresh_job_name" {
+  description = "Cloud Run job name for staging public analysis snapshots."
+  type        = string
+  default     = null
+}
+
+variable "public_analysis_publish_job_name" {
+  description = "Cloud Run job name for publishing public analysis snapshots."
   type        = string
   default     = null
 }

@@ -18,6 +18,11 @@ output "cache_bucket_name" {
   value       = google_storage_bucket.market_data_cache.name
 }
 
+output "public_analysis_bucket_name" {
+  description = "Cloud Storage bucket name for published public analysis snapshots."
+  value       = google_storage_bucket.public_analysis.name
+}
+
 output "deploy_service_account_email" {
   description = "GitHub Actions deploy service account email. Use as GCP_SERVICE_ACCOUNT."
   value       = google_service_account.deploy.email
@@ -31,6 +36,11 @@ output "cloud_build_service_account_email" {
 output "runtime_service_account_email" {
   description = "Cloud Run runtime service account email."
   value       = google_service_account.runtime.email
+}
+
+output "scheduler_service_account_email" {
+  description = "Cloud Scheduler service account email for public analysis jobs."
+  value       = google_service_account.scheduler.email
 }
 
 output "forecast_runtime_service_account_email" {
@@ -51,6 +61,16 @@ output "forecast_service_name" {
 output "web_service_name" {
   description = "Recommended web Cloud Run service name for GitHub Environment variables."
   value       = "stock-drawdown-chart-web${local.environment_suffix}"
+}
+
+output "public_analysis_refresh_job_name" {
+  description = "Cloud Run job name for staging public analysis snapshots."
+  value       = google_cloud_run_v2_job.public_analysis_refresh.name
+}
+
+output "public_analysis_publish_job_name" {
+  description = "Cloud Run job name for publishing public analysis snapshots."
+  value       = google_cloud_run_v2_job.public_analysis_publish.name
 }
 
 output "workload_identity_provider" {
