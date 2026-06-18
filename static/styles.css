@@ -545,15 +545,26 @@ h1 {
   font-weight: 700;
 }
 
+.public-access-inline {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .public-key-note {
-  width: fit-content;
-  max-width: 520px;
-  padding: 10px 12px;
+  max-width: none;
+  padding: 10px 14px;
   border: 1px solid #e4d6bf;
   border-radius: 6px;
   background: #fbf6ed;
   color: #5d5141;
   line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+.public-key-note p {
+  margin: 0;
 }
 
 .public-preview {
@@ -629,11 +640,23 @@ h1 {
   font-size: 14px;
 }
 
+.public-access-section {
+  display: grid;
+  gap: 18px;
+  margin: 0 0 28px;
+}
+
+.public-access-card {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+}
+
 .public-feature-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  margin: 6px 0 28px;
+  margin: 0;
 }
 
 .public-feature-strip > div {
@@ -707,7 +730,8 @@ h1 {
 }
 
 .public-analysis-table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 540px;
 }
 
 .public-analysis-results {
@@ -988,8 +1012,9 @@ h1 {
 
 .affiliate-ad-banner-image {
   display: block;
-  width: 100px;
-  height: 60px;
+  max-width: 100%;
+  width: auto;
+  height: auto;
   border: 0;
 }
 
@@ -1458,7 +1483,10 @@ svg {
 
   .public-feature-strip {
     grid-template-columns: 1fr;
-    margin-top: 24px;
+  }
+
+  .public-access-inline {
+    grid-template-columns: 1fr;
   }
 
   .public-analysis-head {
