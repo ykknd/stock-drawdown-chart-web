@@ -1136,7 +1136,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
             h(
               "p",
               { className: "public-analysis-footnote" },
-              "備考: 状態は、暴落率が0%で直近5年高値を回復している銘柄を「回復済」、それ以外を「未回復」としています。暴落期間が5年の観測期間に達している銘柄は、基準となる高値が観測開始時点に近く、暴落率の解釈に注意が必要です。分析結果には誤りが含まれる可能性があり、投資の最終判断は投資家本人が行ってください。"
+              "備考: 暴落率 = 1 - 現在値 / 直近5年高値、回復度合い = (現在値 - 底値) / (直近5年高値 - 底値) で計算し、表示上は百分率に換算しています。状態は、暴落率が0%で直近5年高値を回復している銘柄を「回復済」、それ以外を「未回復」としています。暴落期間が5年の観測期間に達している銘柄は、基準となる高値が観測開始時点に近く、暴落率の解釈に注意が必要です。分析結果には誤りが含まれる可能性があり、投資の最終判断は投資家本人が行ってください。"
             )
           )
   );
@@ -1164,30 +1164,45 @@ function PublicLandingPage({ authError, onEnterApp, publicAnalysis, publicAnalys
               "p",
               { className: "public-lead" },
               "選んだ銘柄の株価、drawdown、回復までの日数を並べて比較できる分析ツールです。銘柄名で検索し、期間を選び、下落の深さと戻り方を一画面で確認できます。"
-            ),
-            h("p", { className: "public-login-note" }, "分析機能の利用にはGoogleログインが必要です。"),
-            h("div", { id: "google-signin", className: "google-signin" }),
-            onEnterApp
-              ? h(
-                  "button",
-                  { type: "button", className: "public-enter-button", onClick: onEnterApp },
-                  "分析画面へ戻る"
-                )
-              : null,
-            h("p", { className: "public-key-note" }, "利用にはJ-Quants APIキーが必要です。ログイン後に入力して株価データを取得します。"),
-            authError ? h("div", { className: "notice" }, authError) : null
+            )
           ),
           h(DrawdownPreviewFigure)
         ),
+        h(PublicAnalysisSection, { publicAnalysis, loading: publicAnalysisLoading }),
         h(
           "section",
-          { className: "public-feature-strip" },
-          h("div", null, h("strong", null, "Drawdown比較"), h("span", null, "複数銘柄を同じ軸で比較")),
-          h("div", null, h("strong", null, "回復力"), h("span", null, "高値から底値、回復日まで表示")),
-          h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替")),
-          h("div", null, h("strong", null, "時系列予測 preview"), h("span", null, "日足のみ / TimesFMで14営業日先のDDを試算"))
+          { className: "public-access-section" },
+          h(
+            "div",
+            { className: "public-access-card" },
+            h("div", { id: "google-signin", className: "google-signin" }),
+            h(
+              "div",
+              { className: "public-access-inline" },
+              onEnterApp
+                ? h(
+                    "button",
+                    { type: "button", className: "public-enter-button", onClick: onEnterApp },
+                    "分析画面へ戻る"
+                  )
+                : null,
+              h(
+                "div",
+                { className: "public-key-note" },
+                h("p", null, "分析機能の利用にはGoogleログインが必要です。利用にはJ-Quants APIキーが必要です。ログイン後に入力して株価データを取得します。")
+              )
+            ),
+            authError ? h("div", { className: "notice" }, authError) : null
+          ),
+          h(
+            "div",
+            { className: "public-feature-strip" },
+            h("div", null, h("strong", null, "Drawdown比較"), h("span", null, "複数銘柄を同じ軸で比較")),
+            h("div", null, h("strong", null, "回復力"), h("span", null, "高値から底値、回復日まで表示")),
+            h("div", null, h("strong", null, "ローソク足"), h("span", null, "日足・週足・月足を切替")),
+            h("div", null, h("strong", null, "時系列予測 preview"), h("span", null, "日足のみ / TimesFMで14営業日先のDDを試算"))
+          )
         ),
-        h(PublicAnalysisSection, { publicAnalysis, loading: publicAnalysisLoading }),
         h(HelpPage),
         h(PrivacyFooter, { publicFooter: true })
       ),
