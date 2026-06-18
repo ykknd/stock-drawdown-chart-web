@@ -1012,8 +1012,9 @@ h1 {
 
 .affiliate-ad-banner-image {
   display: block;
-  width: 100px;
-  height: 60px;
+  max-width: 100%;
+  width: auto;
+  height: auto;
   border: 0;
 }
 
