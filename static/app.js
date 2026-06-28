@@ -39,6 +39,15 @@ const AFFILIATE_ADS = [
     imageHeight: 200,
     trackingPixelSrc: "https://www19.a8.net/0.gif?a8mat=4B3XBB+4CL0VM+4SM6+60OXD",
   },
+  {
+    label: "広告 / PR",
+    variant: "banner",
+    href: "https://px.a8.net/svt/ejp?a8mat=4B66KG+F7QTBM+1IRY+1TM6KX",
+    imageSrc: "https://www22.a8.net/svt/bgt?aid=260628928920&wid=001&eno=01&mid=s00000007099011021000&mc=1",
+    imageWidth: 336,
+    imageHeight: 280,
+    trackingPixelSrc: "https://www15.a8.net/0.gif?a8mat=4B66KG+F7QTBM+1IRY+1TM6KX",
+  },
 ];
 const DEFAULT_SYMBOLS = "7203, 6758, 9984";
 const DEFAULT_SECURITY_CODES = [];
