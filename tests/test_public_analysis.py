@@ -4,6 +4,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from stock_drawdown_app import (
+    DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE,
     MemoryPublicAnalysisStore,
     PricePoint,
     PublicAnalysisSnapshot,
@@ -113,7 +114,7 @@ def test_load_public_analysis_listed_securities_requires_server_key(monkeypatch)
         assert "JQUANTS_API_KEY" in str(exc)
 
 
-def test_load_public_analysis_listed_securities_uses_server_key_and_run_date(monkeypatch):
+def test_load_public_analysis_listed_securities_uses_server_key_and_explicit_as_of_date(monkeypatch):
     monkeypatch.setenv("JQUANTS_API_KEY", "server-key")
     provider = FakeListingProvider([SecurityInfo(code="7203", name="トヨタ自動車")])
 
@@ -126,6 +127,18 @@ def test_load_public_analysis_listed_securities_uses_server_key_and_run_date(mon
     assert [security.code for security in securities] == ["7203"]
     assert provider.last_api_key == "server-key"
     assert provider.last_as_of_date == "2026-06-10"
+
+
+def test_load_public_analysis_listed_securities_uses_default_as_of_date(monkeypatch):
+    monkeypatch.setenv("JQUANTS_API_KEY", "server-key")
+    provider = FakeListingProvider([SecurityInfo(code="7203", name="トヨタ自動車")])
+
+    as_of_date, securities = load_public_analysis_listed_securities(provider=provider)
+
+    assert as_of_date == "2026-06-08"
+    assert [security.code for security in securities] == ["7203"]
+    assert provider.last_api_key == "server-key"
+    assert provider.last_as_of_date == DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE
 
 
 class FakeProvider:

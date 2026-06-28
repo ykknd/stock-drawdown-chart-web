@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -41,6 +42,7 @@ NIKKEI225_CONSTITUENTS_PATH = Path(__file__).parent / "data" / "nikkei225_consti
 DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS = 5
 DEFAULT_PUBLIC_ANALYSIS_PREFIX = "public-analysis"
 DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
+DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE = "2026-04-01"
 DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES = 10
 PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
 auth_scheme = HTTPBearer(auto_error=False)
@@ -543,6 +545,11 @@ class YFinanceMarketDataProvider:
 
 
 class JQuantsMarketDataProvider:
+    _subscription_coverage_pattern = re.compile(
+        r"covers the following dates:\s*(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})",
+        re.IGNORECASE,
+    )
+
     def _to_jquants_base_code(self, symbol: str) -> str:
         code = symbol.strip().upper()
         if code.endswith(".T"):
@@ -599,6 +606,24 @@ class JQuantsMarketDataProvider:
             if value is not None and value == value and str(value).strip():
                 return str(value).strip()
         return None
+
+    def _is_prime_market_row(self, row: object) -> bool:
+        market_name = row.get("MktNm")
+        if market_name is not None and market_name == market_name and str(market_name).strip() == "プライム":
+            return True
+        market_name_en = row.get("MktNmEn")
+        if market_name_en is not None and market_name_en == market_name_en and str(market_name_en).strip().lower() == "prime":
+            return True
+        return False
+
+    def _extract_subscription_coverage_end_date(self, error: Exception) -> date | None:
+        match = self._subscription_coverage_pattern.search(str(error))
+        if match is None:
+            return None
+        try:
+            return date.fromisoformat(match.group(2))
+        except ValueError:
+            return None
 
     def _extract_listed_code(self, row: object) -> str | None:
         for key in ("Code", "LocalCode", "code"):
@@ -732,16 +757,27 @@ class JQuantsMarketDataProvider:
         as_of_date: str | None = None,
     ) -> tuple[str, list[SecurityInfo]]:
         import jquantsapi
+        import requests
 
         target_date = normalize_date_value(as_of_date or date.today().isoformat())
         cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
-        df = cli.get_list(date_yyyymmdd=target_date)
+        try:
+            df = cli.get_list(date_yyyymmdd=target_date)
+        except requests.exceptions.HTTPError as exc:
+            fallback_end_date = self._extract_subscription_coverage_end_date(exc)
+            fallback_target_date = fallback_end_date.isoformat() if fallback_end_date else None
+            if fallback_target_date is None or target_date <= fallback_target_date:
+                raise
+            df = cli.get_list(date_yyyymmdd=fallback_target_date)
+            target_date = fallback_target_date
         if df.empty:
             raise ValueError(f"J-Quantsの上場銘柄一覧を取得できませんでした: {target_date}")
 
         listed: list[SecurityInfo] = []
         seen: set[str] = set()
         for _, row in df.iterrows():
+            if not self._is_prime_market_row(row):
+                continue
             code = self._extract_listed_code(row)
             if not code or code in seen:
                 continue
@@ -877,7 +913,8 @@ def load_public_analysis_listed_securities(
     if not effective_api_key:
         raise ValueError("公開分析の母集団更新には JQUANTS_API_KEY が必要です")
     listing_provider = provider or JQuantsMarketDataProvider()
-    return listing_provider.get_listed_securities(api_key=effective_api_key, as_of_date=as_of_date)
+    target_date = normalize_date_value(as_of_date or DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE)
+    return listing_provider.get_listed_securities(api_key=effective_api_key, as_of_date=target_date)
 
 
 def normalize_japanese_symbol(raw_symbol: str) -> str:
@@ -1483,7 +1520,7 @@ def build_public_analysis_snapshot(
     if resolved_listed_securities is None:
         resolved_universe_as_of_date, resolved_listed_securities = load_public_analysis_listed_securities(
             provider=listing_provider,
-            as_of_date=public_analysis_run_date(generated_at),
+            as_of_date=DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE,
         )
     securities = build_public_analysis_universe(nikkei_constituents, resolved_listed_securities)
     provider_name = public_analysis_provider_type()

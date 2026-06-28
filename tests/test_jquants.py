@@ -1,7 +1,11 @@
 import os
 import hashlib
+from datetime import date
 from fastapi.testclient import TestClient
+import pandas as pd
 import pytest
+import requests
+from unittest.mock import MagicMock, patch
 from stock_drawdown_app import (
     create_app,
     normalize_market_data_provider,
@@ -38,6 +42,13 @@ def test_jquants_security_name_uses_v2_columns():
     provider = JQuantsMarketDataProvider()
     assert provider._extract_security_name({"CoName": "トヨタ自動車", "CompanyName": ""}) == "トヨタ自動車"
     assert provider._extract_security_name({"CoName": "", "CoNameEn": "TOYOTA MOTOR CORPORATION"}) == "TOYOTA MOTOR CORPORATION"
+
+def test_jquants_prime_market_filter():
+    provider = JQuantsMarketDataProvider()
+
+    assert provider._is_prime_market_row({"MktNm": "プライム"}) is True
+    assert provider._is_prime_market_row({"MktNmEn": "Prime"}) is True
+    assert provider._is_prime_market_row({"MktNm": "スタンダード"}) is False
 
 def test_local_security_name_fallback():
     assert get_local_security_name("6758") == "ソニーグループ"
@@ -79,6 +90,41 @@ def test_jquants_start_date_uses_lagged_end_for_free_tier_history():
 def test_normalize_date_value_accepts_jquants_datetime_string():
     assert normalize_date_value("2025-07-01 00:00:00") == "2025-07-01"
     assert normalize_date_value("20250701") == "2025-07-01"
+
+def test_extract_subscription_coverage_end_date():
+    provider = JQuantsMarketDataProvider()
+
+    end_date = provider._extract_subscription_coverage_end_date(
+        Exception("Your subscription covers the following dates: 2024-04-06 ~ 2026-04-06.")
+    )
+
+    assert end_date == date(2026, 4, 6)
+
+def test_get_listed_securities_falls_back_to_latest_available_date():
+    provider = JQuantsMarketDataProvider()
+    subscription_error = requests.exceptions.HTTPError(
+        "400 for url: https://api.jquants.com/v2/equities/master?date=2026-06-01 body: "
+        "Your subscription covers the following dates: 2024-04-06 ~ 2026-04-06."
+    )
+    listed_df = pd.DataFrame(
+        [
+            {"Code": "72030", "CoName": "トヨタ自動車", "MktNm": "プライム"},
+            {"Code": "67580", "CoName": "ソニーグループ", "MktNm": "スタンダード"},
+            {"Code": "80350", "CoName": "東京エレクトロン", "MktNmEn": "Prime"},
+        ]
+    )
+
+    with patch("jquantsapi.ClientV2") as mock_client_class:
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_list.side_effect = [subscription_error, listed_df]
+
+        as_of_date, securities = provider.get_listed_securities(as_of_date="2026-06-01")
+
+    assert as_of_date == "2026-04-06"
+    assert [security.code for security in securities] == ["7203", "8035"]
+    assert mock_client.get_list.call_args_list[0].kwargs["date_yyyymmdd"] == "2026-06-01"
+    assert mock_client.get_list.call_args_list[1].kwargs["date_yyyymmdd"] == "2026-04-06"
 
 class MockJQuantsProvider:
     def __init__(self):
