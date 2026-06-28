@@ -1043,7 +1043,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         h(
           "p",
           { className: "public-analysis-lead" },
-          "先月末の日経225構成銘柄と月次の時価総額上位リストをもとに、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
+          "日経225構成銘柄のうち、J-Quantsの当日時点の上場銘柄一覧に含まれる銘柄を対象に、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
         )
       ),
       h(
@@ -1051,7 +1051,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         { className: "public-analysis-meta" },
         h("span", null, snapshot ? `更新: ${formatDateTimeDisplay(snapshot.published_at)}` : "更新: 未集計"),
         h("span", null, snapshot ? `対象: ${snapshot.item_count}銘柄` : "対象: -"),
-        h("span", null, snapshot?.universe_month ? `母集団月: ${snapshot.universe_month}` : "母集団月: -")
+        h("span", null, snapshot?.universe_as_of_date ? `母集団基準日: ${snapshot.universe_as_of_date}` : snapshot?.universe_month ? `母集団月: ${snapshot.universe_month}` : "母集団基準日: -")
       )
     ),
     h(
