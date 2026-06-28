@@ -1052,7 +1052,7 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         h(
           "p",
           { className: "public-analysis-lead" },
-          "日経225構成銘柄のうち、J-Quantsの当日時点の上場銘柄一覧に含まれる銘柄を対象に、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
+          "日経225構成銘柄のうち、J-Quantsで取得可能な最新時点の上場銘柄一覧に含まれる銘柄を対象に、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
         )
       ),
       h(
