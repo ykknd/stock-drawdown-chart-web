@@ -182,7 +182,7 @@ Additional useful Terraform outputs:
 
 The forecast service defaults to `min instances = 0`, `max instances = 1`, and `2Gi` memory. If cold starts become a product issue, set `forecast_min_instances = 1` in `terraform.tfvars` and re-apply Terraform.
 
-Do not set `JQUANTS_API_KEY` on public Cloud Run hosting. Users should enter their own key in the web UI.
+Do not set `JQUANTS_API_KEY` on the public web Cloud Run service. Users should enter their own key in the web UI. If the public-analysis refresh job uses J-Quants listed securities to build its universe, set `JQUANTS_API_KEY` on that job only.
 
 ## Custom Domain
 

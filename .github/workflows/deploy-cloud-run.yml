@@ -203,7 +203,12 @@ jobs:
 
       - name: Update public analysis Cloud Run jobs
         run: |
+          if [ -z "${{ secrets.JQUANTS_API_KEY }}" ]; then
+            echo "JQUANTS_API_KEY secret is required for public-analysis jobs." >&2
+            exit 1
+          fi
           JOB_ENV_VARS="PUBLIC_ANALYSIS_BUCKET=${{ vars.PUBLIC_ANALYSIS_BUCKET }},PUBLIC_ANALYSIS_PREFIX=${{ vars.PUBLIC_ANALYSIS_PREFIX || 'public-analysis' }},PUBLIC_ANALYSIS_LOOKBACK_YEARS=${{ vars.PUBLIC_ANALYSIS_LOOKBACK_YEARS || '5' }},PUBLIC_ANALYSIS_PROVIDER=${{ vars.PUBLIC_ANALYSIS_PROVIDER || 'yfinance' }}"
+          JOB_ENV_VARS="$JOB_ENV_VARS,JQUANTS_API_KEY=${{ secrets.JQUANTS_API_KEY }}"
 
           gcloud run jobs update "${{ vars.PUBLIC_ANALYSIS_REFRESH_JOB }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \

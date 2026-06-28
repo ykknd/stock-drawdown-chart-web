@@ -80,6 +80,8 @@ J-Quants APIキーは以下の優先順で解決されます。
 
 > [!WARNING]
 > 公開サーバーに `JQUANTS_API_KEY` を設定すると、それは運営者の共有キーとして消費されます。通常、不特定多数が利用する公開サイトではサーバーキーを設定せず、利用者に自身のキーを入力させる運用を推奨します。
+>
+> GitHub Actions / Cloud Run Job に設定する `JQUANTS_API_KEY` は、公開ランキングの `refresh-public-analysis` job が J-Quants から上場銘柄一覧を取得するための server-side 用です。これは分析画面で利用者が使う J-Quants API キーの代わりにはならず、公開 web service には設定しないでください。
 
 ## Market Data Cache
 
@@ -278,7 +280,7 @@ Optional variables:
 - `FORECAST_MEMORY`: defaults to `2Gi`; use `4Gi` for initial staging TimesFM tests
 - `FORECAST_CPU`: defaults to `1`
 
-For public hosting, do not set `JQUANTS_API_KEY` on Cloud Run. Users should provide their own J-Quants API key in the web UI.
+For public hosting, do not set `JQUANTS_API_KEY` on the public web Cloud Run service. Users should provide their own J-Quants API key in the web UI. If you use J-Quants listed securities for the public ranking universe, set `JQUANTS_API_KEY` on the `refresh-public-analysis` job only.
 
 ## Drawdown Forecasting Preview
 

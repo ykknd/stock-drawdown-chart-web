@@ -8,12 +8,12 @@ from stock_drawdown_app import (
     PricePoint,
     PublicAnalysisSnapshot,
     SecurityInfo,
-    RankedSecurity,
     PUBLIC_ANALYSIS_LIVE_KEY,
     build_public_analysis_universe,
     calculate_current_drawdown_metrics,
     create_app,
     is_public_analysis_snapshot_stale,
+    load_public_analysis_listed_securities,
     publish_public_analysis_snapshot,
     public_analysis_staged_key,
     refresh_public_analysis_snapshot,
@@ -75,21 +75,57 @@ def test_calculate_current_drawdown_metrics_new_high_and_flat():
 
 
 def test_build_public_analysis_universe_intersects_only_nikkei_members():
-    month, universe = build_public_analysis_universe(
+    universe = build_public_analysis_universe(
         nikkei_constituents=[
             SecurityInfo(code="7203", name="トヨタ自動車"),
             SecurityInfo(code="6758", name="ソニーグループ"),
         ],
-        market_cap_ranking=[
-            RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車"),
-            RankedSecurity(universe_month="2026-05", rank=2, code="9984", name="ソフトバンクグループ"),
-            RankedSecurity(universe_month="2026-05", rank=3, code="6758", name="ソニーグループ"),
+        listed_securities=[
+            SecurityInfo(code="7203", name="トヨタ自動車"),
+            SecurityInfo(code="9984", name="ソフトバンクグループ"),
+            SecurityInfo(code="6758", name="ソニーグループ"),
         ],
-        limit=100,
     )
 
-    assert month == "2026-05"
     assert [security.code for security in universe] == ["7203", "6758"]
+
+
+class FakeListingProvider:
+    def __init__(self, securities: list[SecurityInfo], as_of_date: str = "2026-06-08") -> None:
+        self.securities = securities
+        self.as_of_date = as_of_date
+        self.last_api_key = None
+        self.last_as_of_date = None
+
+    def get_listed_securities(self, api_key=None, as_of_date=None):
+        self.last_api_key = api_key
+        self.last_as_of_date = as_of_date
+        return self.as_of_date, self.securities
+
+
+def test_load_public_analysis_listed_securities_requires_server_key(monkeypatch):
+    monkeypatch.delenv("JQUANTS_API_KEY", raising=False)
+
+    try:
+        load_public_analysis_listed_securities(provider=FakeListingProvider([]))
+        assert False, "expected missing key failure"
+    except ValueError as exc:
+        assert "JQUANTS_API_KEY" in str(exc)
+
+
+def test_load_public_analysis_listed_securities_uses_server_key_and_run_date(monkeypatch):
+    monkeypatch.setenv("JQUANTS_API_KEY", "server-key")
+    provider = FakeListingProvider([SecurityInfo(code="7203", name="トヨタ自動車")])
+
+    as_of_date, securities = load_public_analysis_listed_securities(
+        provider=provider,
+        as_of_date="2026-06-10",
+    )
+
+    assert as_of_date == "2026-06-08"
+    assert [security.code for security in securities] == ["7203"]
+    assert provider.last_api_key == "server-key"
+    assert provider.last_as_of_date == "2026-06-10"
 
 
 class FakeProvider:
@@ -123,10 +159,11 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
             SecurityInfo(code="7203", name="トヨタ自動車"),
             SecurityInfo(code="6758", name="ソニーグループ"),
         ],
-        market_cap_ranking=[
-            RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車"),
-            RankedSecurity(universe_month="2026-05", rank=2, code="6758", name="ソニーグループ"),
+        listed_securities=[
+            SecurityInfo(code="7203", name="トヨタ自動車"),
+            SecurityInfo(code="6758", name="ソニーグループ"),
         ],
+        universe_as_of_date="2026-06-08",
         generated_at="2026-06-08T18:00:00+09:00",
     )
 
@@ -134,6 +171,7 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
     assert snapshot.item_count == 2
     assert staged_payload is not None
     assert "market_cap" not in str(staged_payload)
+    assert snapshot.universe_as_of_date == "2026-06-08"
     assert staged_payload["items"][0]["code"] == "7203"
 
 
@@ -155,11 +193,12 @@ def test_refresh_public_analysis_snapshot_skips_failed_symbols_below_threshold()
             SecurityInfo(code="6758", name="ソニーグループ"),
             SecurityInfo(code="9613", name="NTTデータグループ"),
         ],
-        market_cap_ranking=[
-            RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車"),
-            RankedSecurity(universe_month="2026-05", rank=2, code="6758", name="ソニーグループ"),
-            RankedSecurity(universe_month="2026-05", rank=3, code="9613", name="NTTデータグループ"),
+        listed_securities=[
+            SecurityInfo(code="7203", name="トヨタ自動車"),
+            SecurityInfo(code="6758", name="ソニーグループ"),
+            SecurityInfo(code="9613", name="NTTデータグループ"),
         ],
+        universe_as_of_date="2026-06-08",
         generated_at="2026-06-08T18:00:00+09:00",
     )
 
@@ -178,18 +217,19 @@ def test_refresh_public_analysis_snapshot_raises_when_failures_reach_threshold()
     )
 
     nikkei_constituents = [SecurityInfo(code="7203", name="トヨタ自動車")]
-    market_cap_ranking = [RankedSecurity(universe_month="2026-05", rank=1, code="7203", name="トヨタ自動車")]
+    listed_securities = [SecurityInfo(code="7203", name="トヨタ自動車")]
     for rank, code in enumerate(range(9000, 9010), start=2):
         code_text = str(code)
         nikkei_constituents.append(SecurityInfo(code=code_text, name=code_text))
-        market_cap_ranking.append(RankedSecurity(universe_month="2026-05", rank=rank, code=code_text, name=code_text))
+        listed_securities.append(SecurityInfo(code=code_text, name=code_text))
 
     try:
         refresh_public_analysis_snapshot(
             store=store,
             provider=provider,
             nikkei_constituents=nikkei_constituents,
-            market_cap_ranking=market_cap_ranking,
+            listed_securities=listed_securities,
+            universe_as_of_date="2026-06-08",
             generated_at="2026-06-08T18:00:00+09:00",
         )
         assert False, "expected threshold failure"

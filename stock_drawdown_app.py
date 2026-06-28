@@ -38,11 +38,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
 JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
 NIKKEI225_CONSTITUENTS_PATH = Path(__file__).parent / "data" / "nikkei225_constituents.csv"
-MARKET_CAP_RANKING_PATH = Path(__file__).parent / "data" / "jpx_market_cap_top100_latest.csv"
 DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS = 5
 DEFAULT_PUBLIC_ANALYSIS_PREFIX = "public-analysis"
 DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
-DEFAULT_PUBLIC_ANALYSIS_LIMIT = 100
 DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES = 10
 PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
 auth_scheme = HTTPBearer(auto_error=False)
@@ -151,7 +149,8 @@ class PublicAnalysisSnapshot(BaseModel):
     as_of_date: str
     published_at: str
     provider: str
-    universe_month: str
+    universe_month: str = ""
+    universe_as_of_date: str | None = None
     item_count: int
     items: list[PublicAnalysisItem] = Field(default_factory=list)
 
@@ -247,14 +246,6 @@ class RecoveryMetrics:
     underwater_days: int
     is_recovered: bool
     recovery_progress: float
-
-
-@dataclass(frozen=True)
-class RankedSecurity:
-    universe_month: str
-    rank: int
-    code: str
-    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -609,6 +600,22 @@ class JQuantsMarketDataProvider:
                 return str(value).strip()
         return None
 
+    def _extract_listed_code(self, row: object) -> str | None:
+        for key in ("Code", "LocalCode", "code"):
+            value = row.get(key)
+            if value is None or value != value:
+                continue
+            code_text = str(value).strip()
+            if not code_text:
+                continue
+            if code_text.endswith(".0"):
+                code_text = code_text[:-2]
+            try:
+                return self._to_jquants_base_code(code_text)
+            except ValueError:
+                continue
+        return None
+
     def get_adjusted_close(
         self,
         symbol: str,
@@ -719,6 +726,32 @@ class JQuantsMarketDataProvider:
             pass
         return None
 
+    def get_listed_securities(
+        self,
+        api_key: str | None = None,
+        as_of_date: str | None = None,
+    ) -> tuple[str, list[SecurityInfo]]:
+        import jquantsapi
+
+        target_date = normalize_date_value(as_of_date or date.today().isoformat())
+        cli = jquantsapi.ClientV2(api_key=api_key) if api_key else jquantsapi.ClientV2()
+        df = cli.get_list(date_yyyymmdd=target_date)
+        if df.empty:
+            raise ValueError(f"J-Quantsの上場銘柄一覧を取得できませんでした: {target_date}")
+
+        listed: list[SecurityInfo] = []
+        seen: set[str] = set()
+        for _, row in df.iterrows():
+            code = self._extract_listed_code(row)
+            if not code or code in seen:
+                continue
+            name = self._extract_security_name(row) or get_local_security_name(code) or code
+            listed.append(SecurityInfo(code=code, name=name))
+            seen.add(code)
+        if not listed:
+            raise ValueError(f"J-Quantsの上場銘柄一覧に有効な銘柄コードがありません: {target_date}")
+        return target_date, listed
+
 
 def hash_api_key(api_key: str) -> str:
     import hashlib
@@ -810,53 +843,41 @@ def load_nikkei225_constituents(path: Path = NIKKEI225_CONSTITUENTS_PATH) -> lis
     return constituents
 
 
-def load_market_cap_ranking(path: Path = MARKET_CAP_RANKING_PATH) -> list[RankedSecurity]:
-    if not path.exists():
-        return []
-
-    ranking: list[RankedSecurity] = []
-    with path.open(newline="", encoding="utf-8-sig") as csv_file:
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            code = (row.get("code") or "").strip().upper()
-            month = (row.get("universe_month") or "").strip()
-            rank_raw = (row.get("rank") or "").strip()
-            if not code or not month or not rank_raw:
-                continue
-            try:
-                rank = int(rank_raw)
-            except ValueError:
-                continue
-            name = (row.get("name") or "").strip() or get_local_security_name(code)
-            ranking.append(RankedSecurity(universe_month=month, rank=rank, code=code, name=name))
-    return sorted(ranking, key=lambda item: item.rank)
-
-
 def build_public_analysis_universe(
     nikkei_constituents: list[SecurityInfo] | None = None,
-    market_cap_ranking: list[RankedSecurity] | None = None,
-    limit: int = DEFAULT_PUBLIC_ANALYSIS_LIMIT,
-) -> tuple[str, list[SecurityInfo]]:
+    listed_securities: list[SecurityInfo] | None = None,
+    limit: int | None = None,
+) -> list[SecurityInfo]:
     nikkei_constituents = nikkei_constituents or load_nikkei225_constituents()
-    market_cap_ranking = market_cap_ranking or load_market_cap_ranking()
-    nikkei_by_code = {security.code.upper(): security for security in nikkei_constituents}
+    listed_securities = listed_securities or []
+    listed_by_code = {security.code.upper(): security for security in listed_securities}
 
     selected: list[SecurityInfo] = []
-    universe_month = ""
-    for ranked in market_cap_ranking:
-        security = nikkei_by_code.get(ranked.code.upper())
-        if security is None:
+    for security in nikkei_constituents:
+        listed = listed_by_code.get(security.code.upper())
+        if listed is None:
             continue
-        universe_month = universe_month or ranked.universe_month
         selected.append(
             SecurityInfo(
                 code=security.code,
-                name=ranked.name or security.name or get_local_security_name(security.code) or security.code,
+                name=listed.name or security.name or get_local_security_name(security.code) or security.code,
             )
         )
-        if len(selected) >= limit:
+        if limit is not None and len(selected) >= limit:
             break
-    return universe_month, selected
+    return selected
+
+
+def load_public_analysis_listed_securities(
+    provider: JQuantsMarketDataProvider | None = None,
+    api_key: str | None = None,
+    as_of_date: str | None = None,
+) -> tuple[str, list[SecurityInfo]]:
+    effective_api_key = api_key or get_jquants_api_key_from_env()
+    if not effective_api_key:
+        raise ValueError("公開分析の母集団更新には JQUANTS_API_KEY が必要です")
+    listing_provider = provider or JQuantsMarketDataProvider()
+    return listing_provider.get_listed_securities(api_key=effective_api_key, as_of_date=as_of_date)
 
 
 def normalize_japanese_symbol(raw_symbol: str) -> str:
@@ -1451,11 +1472,20 @@ def is_public_analysis_snapshot_stale(
 def build_public_analysis_snapshot(
     provider: MarketDataProvider | None = None,
     nikkei_constituents: list[SecurityInfo] | None = None,
-    market_cap_ranking: list[RankedSecurity] | None = None,
+    listed_securities: list[SecurityInfo] | None = None,
+    universe_as_of_date: str | None = None,
+    listing_provider: JQuantsMarketDataProvider | None = None,
     generated_at: str | None = None,
 ) -> PublicAnalysisSnapshot:
     analysis_provider = provider or create_market_data_provider(public_analysis_provider_type())
-    universe_month, securities = build_public_analysis_universe(nikkei_constituents, market_cap_ranking)
+    resolved_universe_as_of_date = universe_as_of_date
+    resolved_listed_securities = listed_securities
+    if resolved_listed_securities is None:
+        resolved_universe_as_of_date, resolved_listed_securities = load_public_analysis_listed_securities(
+            provider=listing_provider,
+            as_of_date=public_analysis_run_date(generated_at),
+        )
+    securities = build_public_analysis_universe(nikkei_constituents, resolved_listed_securities)
     provider_name = public_analysis_provider_type()
     items: list[PublicAnalysisItem] = []
     failed_symbols: list[str] = []
@@ -1499,7 +1529,8 @@ def build_public_analysis_snapshot(
         as_of_date=as_of_date,
         published_at=generated_at or jst_now_iso(),
         provider=provider_name,
-        universe_month=universe_month,
+        universe_month=(resolved_universe_as_of_date or "")[:7],
+        universe_as_of_date=resolved_universe_as_of_date,
         item_count=len(items),
         items=items,
     )
@@ -1509,13 +1540,17 @@ def refresh_public_analysis_snapshot(
     store: PublicAnalysisStore | None = None,
     provider: MarketDataProvider | None = None,
     nikkei_constituents: list[SecurityInfo] | None = None,
-    market_cap_ranking: list[RankedSecurity] | None = None,
+    listed_securities: list[SecurityInfo] | None = None,
+    universe_as_of_date: str | None = None,
+    listing_provider: JQuantsMarketDataProvider | None = None,
     generated_at: str | None = None,
 ) -> PublicAnalysisSnapshot:
     snapshot = build_public_analysis_snapshot(
         provider=provider,
         nikkei_constituents=nikkei_constituents,
-        market_cap_ranking=market_cap_ranking,
+        listed_securities=listed_securities,
+        universe_as_of_date=universe_as_of_date,
+        listing_provider=listing_provider,
         generated_at=generated_at,
     )
     analysis_store = store or create_public_analysis_store()
