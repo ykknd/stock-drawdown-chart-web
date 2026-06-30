@@ -37,6 +37,16 @@ This repository is prepared for tag-based staging and production deployment to C
 
 Staging and production should use separate Google Cloud projects and separate GitHub Environments.
 
+### Required GitHub Environment variables
+
+SEO と公開 URL の整合性のため、environment variables に以下を設定します。
+
+- `PUBLIC_SITE_URL`
+  - staging 例: `https://stock-drawdown-chart-web-staging-xxxxxxxxxx-an.a.run.app`
+  - production 例: `https://stock-drawdown.com`
+
+`PUBLIC_SITE_URL` は `<link rel="canonical">`、`robots.txt`、`sitemap.xml`、OG URL の生成に使います。Cloud Run 配下では proxy 越しに `http` と解釈される場合があるため、本番 URL は明示設定を推奨します。
+
 ### Local auth behavior
 
 Authentication is disabled by default for local development.
@@ -218,6 +228,81 @@ Terraformは主に以下を作成します。
 - Cloud Run runtime service account
 - Forecast runtime service account
 - Private Forecast Cloud Run service
+
+## SEO / Search Console Operations
+
+### `sitemap.xml` の表示について
+
+ブラウザで `https://<public-site-url>/sitemap.xml` を開いたときに、
+
+```xml
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  ...
+</urlset>
+```
+
+のように XML がそのまま表示されるのは正常です。style 情報がないだけで、壊れているわけではありません。
+
+Search Console には、この `sitemap.xml` の URL をそのまま送信します。
+
+### deploy 後の確認項目
+
+1. `https://<public-site-url>/robots.txt` が返ること
+2. `https://<public-site-url>/sitemap.xml` が返ること
+3. `sitemap.xml` 内の `<loc>` が `https://` の正規 URL になっていること
+4. トップページの HTML に `canonical`、`og:*`、`application/ld+json` が含まれていること
+
+### Search Console に送信するもの
+
+- `URL プレフィックス` または `ドメイン` プロパティ
+- `https://<public-site-url>/sitemap.xml`
+- 必要に応じてトップページ `/` の URL 検査と再クロール依頼
+
+### Search Console で見るべき指標
+
+- `ページのインデックス登録`
+  - `/` が `登録済み` になっているか
+  - `クロール済み - インデックス未登録` が増えていないか
+- `サイトマップ`
+  - `送信成功`
+  - `検出された URL` と `インデックス登録済み URL` の差
+- `検索パフォーマンス`
+  - `表示回数`
+  - `クリック数`
+  - `平均掲載順位`
+  - `主なクエリ`
+  - `主なページ`
+- `ページエクスペリエンス`
+  - モバイルの利用性
+  - Core Web Vitals の問題有無
+
+### 運用ルール
+
+- title / description / 構造化データを変更したら再 deploy 後に `/` の再クロール依頼を行う
+- ドメインや Cloud Run URL を変更したら `PUBLIC_SITE_URL` も更新する
+- 公開ランキングの説明文を大きく変更した場合は、Search Console の `検索パフォーマンス` でクエリ変化を確認する
+
+## Current SEO implementation
+
+現在の公開トップでは、以下を実装済みです。
+
+- 固定の `title` / `meta description`
+- `canonical`
+- Open Graph / Twitter Card
+- `robots.txt`
+- `sitemap.xml`
+- `WebSite` / `WebPage` / `Dataset` / `FAQPage` の JSON-LD
+- `manifest.webmanifest`
+- JavaScript 実行前でも読める初期本文
+
+### Additional SEO ideas
+
+追加で検討できる案:
+
+- `/help` など静的にクロール可能な補助ページの追加
+- 公開ランキングの更新履歴ページ追加
+- 公開ランキングの上位銘柄に関する静的解説ページ追加
+- 被リンク獲得を意識したリファレンス記事や比較記事の追加
 - Workload Identity Pool / Provider
 - GitHub Actions OIDC用IAM binding
 - Cloud Run runtime service accountのcache bucket read/write権限

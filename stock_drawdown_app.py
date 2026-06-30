@@ -1622,6 +1622,11 @@ def get_public_site_url(request: Request) -> str:
     configured_url = os.getenv("PUBLIC_SITE_URL", "").strip()
     if configured_url:
         return configured_url.rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+    host = forwarded_host or request.headers.get("host", "").strip()
+    if forwarded_proto and host:
+        return f"{forwarded_proto}://{host}".rstrip("/")
     return str(request.base_url).rstrip("/")
 
 
@@ -1716,20 +1721,36 @@ def render_robots_txt(request: Request) -> str:
     )
 
 
-def render_sitemap_xml(request: Request) -> str:
+def render_sitemap_xml(request: Request, lastmod: str | None = None) -> str:
     site_url = get_public_site_url(request)
-    lastmod = date.today().isoformat()
+    effective_lastmod = lastmod or date.today().isoformat()
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         "  <url>\n"
         f"    <loc>{html.escape(site_url + '/', quote=False)}</loc>\n"
-        f"    <lastmod>{lastmod}</lastmod>\n"
+        f"    <lastmod>{effective_lastmod}</lastmod>\n"
         "    <changefreq>daily</changefreq>\n"
         "    <priority>1.0</priority>\n"
         "  </url>\n"
         "</urlset>\n"
     )
+
+
+def public_analysis_lastmod_date(store: PublicAnalysisStore | None) -> str | None:
+    if store is None:
+        return None
+    payload = store.load(PUBLIC_ANALYSIS_LIVE_KEY)
+    if payload is None:
+        return None
+    snapshot = PublicAnalysisSnapshot.model_validate(payload)
+    published_at = snapshot.published_at
+    if not published_at:
+        return None
+    try:
+        return datetime.fromisoformat(published_at).date().isoformat()
+    except ValueError:
+        return None
 
 
 def create_app(
@@ -2031,7 +2052,8 @@ def create_app(
 
     @app.get("/sitemap.xml", include_in_schema=False)
     def sitemap(request: Request) -> Response:
-        return Response(content=render_sitemap_xml(request), media_type="application/xml")
+        lastmod = public_analysis_lastmod_date(configured_public_analysis_store)
+        return Response(content=render_sitemap_xml(request, lastmod=lastmod), media_type="application/xml")
 
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
