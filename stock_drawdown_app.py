@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
@@ -12,10 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -45,6 +46,12 @@ DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
 DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE = "2026-04-01"
 DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES = 10
 PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
+SEO_TITLE = "Drawdown Board | 日本株の暴落率・回復度合いを可視化"
+SEO_DESCRIPTION = (
+    "日本株のドローダウン分析ツール。日経225採用銘柄の公開暴落ランキングを掲載し、"
+    "暴落率・暴落期間・回復度合いを毎営業日更新。Googleログイン後は個別銘柄の drawdown 分析も利用できます。"
+)
+SEO_OG_IMAGE_PATH = "/og-image.svg"
 auth_scheme = HTTPBearer(auto_error=False)
 
 
@@ -1611,6 +1618,120 @@ def publish_public_analysis_snapshot(
     return live_snapshot
 
 
+def get_public_site_url(request: Request) -> str:
+    configured_url = os.getenv("PUBLIC_SITE_URL", "").strip()
+    if configured_url:
+        return configured_url.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def render_index_html(request: Request) -> str:
+    site_url = get_public_site_url(request)
+    canonical_url = f"{site_url}/"
+    og_image_url = f"{site_url}{SEO_OG_IMAGE_PATH}"
+    structured_data = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "WebSite",
+                "name": "Drawdown Board",
+                "url": canonical_url,
+                "inLanguage": "ja-JP",
+                "description": SEO_DESCRIPTION,
+            },
+            {
+                "@type": "WebPage",
+                "name": SEO_TITLE,
+                "url": canonical_url,
+                "inLanguage": "ja-JP",
+                "description": SEO_DESCRIPTION,
+                "isPartOf": {"@type": "WebSite", "name": "Drawdown Board", "url": canonical_url},
+                "primaryImageOfPage": {"@type": "ImageObject", "url": og_image_url},
+            },
+            {
+                "@type": "Dataset",
+                "name": "日経225採用銘柄の公開暴落ランキング",
+                "url": canonical_url,
+                "inLanguage": "ja-JP",
+                "description": (
+                    "日経225採用銘柄を対象に、直近5年の暴落率、暴落期間、回復度合いを毎営業日集計した公開ランキングです。"
+                ),
+                "keywords": ["日本株", "日経225", "暴落率", "ドローダウン", "回復度合い"],
+                "temporalCoverage": "P5Y",
+                "measurementTechnique": "price drawdown analysis",
+            },
+            {
+                "@type": "FAQPage",
+                "mainEntity": [
+                    {
+                        "@type": "Question",
+                        "name": "Googleログイン情報はなぜ必要なのですか？",
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": (
+                                "公開サイトとしての不正利用を抑えるため、本人確認にGoogleログインを使っています。"
+                                "Googleパスワード、Google APIアクセストークン、refresh token、"
+                                "GmailやDriveへの権限は取得しません。"
+                            ),
+                        },
+                    },
+                    {
+                        "@type": "Question",
+                        "name": "J-Quants APIキーはなぜ必要なのですか？",
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": (
+                                "ログイン後の個別銘柄分析でJ-Quantsから株価データを取得するために必要です。"
+                                "入力されたキーは価格取得リクエスト時だけサーバーへ送信され、"
+                                "ブラウザやサーバーに永続保存しません。"
+                            ),
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+    replacements = {
+        "__SEO_TITLE__": html.escape(SEO_TITLE),
+        "__SEO_DESCRIPTION__": html.escape(SEO_DESCRIPTION, quote=True),
+        "__SEO_CANONICAL_URL__": html.escape(canonical_url, quote=True),
+        "__SEO_OG_IMAGE_URL__": html.escape(og_image_url, quote=True),
+        "__SEO_JSON_LD__": json.dumps(structured_data, ensure_ascii=False, separators=(",", ":")),
+    }
+    document = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for placeholder, value in replacements.items():
+        document = document.replace(placeholder, value)
+    return document
+
+
+def render_robots_txt(request: Request) -> str:
+    site_url = get_public_site_url(request)
+    return "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            f"Sitemap: {site_url}/sitemap.xml",
+            "",
+        ]
+    )
+
+
+def render_sitemap_xml(request: Request) -> str:
+    site_url = get_public_site_url(request)
+    lastmod = date.today().isoformat()
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        "  <url>\n"
+        f"    <loc>{html.escape(site_url + '/', quote=False)}</loc>\n"
+        f"    <lastmod>{lastmod}</lastmod>\n"
+        "    <changefreq>daily</changefreq>\n"
+        "    <priority>1.0</priority>\n"
+        "  </url>\n"
+        "</urlset>\n"
+    )
+
+
 def create_app(
     provider: MarketDataProvider | None = None,
     forecast_client: ForecastClient | None = None,
@@ -1895,6 +2016,22 @@ def create_app(
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
         return FileResponse(STATIC_DIR / "favicon.svg")
+
+    @app.get("/", include_in_schema=False)
+    def index(request: Request) -> HTMLResponse:
+        return HTMLResponse(render_index_html(request))
+
+    @app.get("/index.html", include_in_schema=False)
+    def index_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/", status_code=308)
+
+    @app.get("/robots.txt", include_in_schema=False)
+    def robots(request: Request) -> PlainTextResponse:
+        return PlainTextResponse(render_robots_txt(request))
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    def sitemap(request: Request) -> Response:
+        return Response(content=render_sitemap_xml(request), media_type="application/xml")
 
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

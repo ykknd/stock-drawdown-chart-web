@@ -3,12 +3,65 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Drawdown Board</title>
+    <title>__SEO_TITLE__</title>
+    <meta name="description" content="__SEO_DESCRIPTION__" />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+    <link rel="canonical" href="__SEO_CANONICAL_URL__" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="theme-color" content="#f6f3ee" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:site_name" content="Drawdown Board" />
+    <meta property="og:title" content="__SEO_TITLE__" />
+    <meta property="og:description" content="__SEO_DESCRIPTION__" />
+    <meta property="og:url" content="__SEO_CANONICAL_URL__" />
+    <meta property="og:image" content="__SEO_OG_IMAGE_URL__" />
+    <meta property="og:image:alt" content="Drawdown Board の公開暴落ランキングを示すOG画像" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="__SEO_TITLE__" />
+    <meta name="twitter:description" content="__SEO_DESCRIPTION__" />
+    <meta name="twitter:image" content="__SEO_OG_IMAGE_URL__" />
     <link rel="icon" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
+    <script type="application/ld+json">
+      __SEO_JSON_LD__
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="seo-fallback">
+        <p class="seo-fallback-eyebrow">日本株の下落耐性を可視化</p>
+        <h1>Drawdown Board</h1>
+        <p class="seo-fallback-lead">
+          日本株の drawdown を可視化する分析ツールです。日経225採用銘柄の公開暴落ランキングを掲載し、
+          暴落率、暴落期間、回復度合いを毎営業日更新しています。
+        </p>
+        <section class="seo-fallback-section">
+          <h2>公開ランキング</h2>
+          <p>
+            ログイン前でも、日経225採用銘柄の現在進行中の下落状況を比較できます。公開ランキングでは
+            暴落率、暴落期間、回復度合いを確認できます。
+          </p>
+        </section>
+        <section class="seo-fallback-section">
+          <h2>ログイン後の分析</h2>
+          <p>
+            Googleログイン後は、J-Quants APIキーを使って個別銘柄の drawdown、回復推移、ローソク足、
+            時系列予測 preview を表示できます。
+          </p>
+        </section>
+      </main>
+    </div>
+    <noscript>
+      <style>
+        body {
+          overflow: auto;
+        }
+      </style>
+      <div class="seo-noscript">
+        JavaScript を有効にすると、公開ランキングの並び替えと個別銘柄の分析機能を利用できます。
+      </div>
+    </noscript>
     <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>

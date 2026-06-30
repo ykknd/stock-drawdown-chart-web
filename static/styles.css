@@ -24,6 +24,53 @@ body {
     Inter, "Segoe UI", "Noto Sans JP", system-ui, -apple-system, sans-serif;
 }
 
+.seo-fallback {
+  width: min(960px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 56px 0 72px;
+}
+
+.seo-fallback-eyebrow {
+  margin: 0 0 12px;
+  color: var(--drawdown);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.seo-fallback h1 {
+  margin: 0;
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  line-height: 0.92;
+  letter-spacing: -0.06em;
+}
+
+.seo-fallback-lead,
+.seo-fallback-section p {
+  max-width: 70ch;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.8;
+}
+
+.seo-fallback-section {
+  margin-top: 28px;
+}
+
+.seo-fallback-section h2 {
+  margin: 0 0 8px;
+  font-size: 1.3rem;
+}
+
+.seo-noscript {
+  width: min(960px, calc(100% - 32px));
+  margin: 0 auto 40px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
 button,
 input {
   font: inherit;
