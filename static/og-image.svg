@@ -1,0 +1,18 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F6F3EE"/>
+  <rect x="42" y="42" width="1116" height="546" rx="28" fill="#FFFdfa" stroke="#DDD7CE" stroke-width="2"/>
+  <path d="M113 382C179 339 218 257 292 231C360 207 410 249 482 221C563 190 609 119 692 122C788 126 823 255 915 277C984 294 1039 246 1088 196" stroke="#146C78" stroke-width="12" stroke-linecap="round"/>
+  <path d="M692 122C766 124 801 181 855 251C909 322 956 406 1041 424C1067 430 1094 428 1115 422" stroke="#BF3F37" stroke-width="10" stroke-linecap="round" stroke-dasharray="22 20"/>
+  <circle cx="692" cy="122" r="12" fill="#146C78"/>
+  <circle cx="855" cy="251" r="12" fill="#BF3F37"/>
+  <circle cx="1115" cy="422" r="12" fill="#146C78"/>
+  <text x="88" y="122" fill="#BF3F37" font-size="26" font-family="'Noto Sans JP', 'Segoe UI', sans-serif" font-weight="700">日本株の下落耐性を可視化</text>
+  <text x="88" y="236" fill="#1C2326" font-size="92" font-family="'Inter', 'Segoe UI', sans-serif" font-weight="800">Drawdown</text>
+  <text x="88" y="326" fill="#1C2326" font-size="92" font-family="'Inter', 'Segoe UI', sans-serif" font-weight="800">Board</text>
+  <text x="88" y="394" fill="#687076" font-size="30" font-family="'Noto Sans JP', 'Segoe UI', sans-serif">
+    <tspan x="88" dy="0">日経225採用銘柄の公開暴落ランキングを掲載。</tspan>
+    <tspan x="88" dy="44">暴落率、暴落期間、回復度合いを毎営業日更新。</tspan>
+  </text>
+  <rect x="88" y="470" width="292" height="64" rx="18" fill="#253A5C"/>
+  <text x="116" y="512" fill="#FFFdfa" font-size="28" font-family="'Noto Sans JP', 'Segoe UI', sans-serif" font-weight="700">公開ランキング掲載中</text>
+</svg>
