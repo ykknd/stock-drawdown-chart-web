@@ -15,6 +15,7 @@ from stock_drawdown_app import (
     create_app,
     is_public_analysis_snapshot_stale,
     load_public_analysis_listed_securities,
+    load_market_cap_top100,
     publish_public_analysis_snapshot,
     public_analysis_staged_key,
     refresh_public_analysis_snapshot,
@@ -75,9 +76,20 @@ def test_calculate_current_drawdown_metrics_new_high_and_flat():
     assert flat.current_drawdown_pct == 0.0
 
 
-def test_build_public_analysis_universe_intersects_only_nikkei_members():
+def test_market_cap_top100_has_ordered_unique_members():
+    securities = load_market_cap_top100()
+
+    assert len(securities) == 100
+    assert [security.code for security in build_public_analysis_universe()] == [security.code for security in securities]
+    assert securities[0].code == "7203"
+    assert securities[3].code == "285A"
+    assert securities[-1].code == "9104"
+    assert len({security.code for security in securities}) == 100
+
+
+def test_build_public_analysis_universe_intersects_only_ranked_members():
     universe = build_public_analysis_universe(
-        nikkei_constituents=[
+        ranked_securities=[
             SecurityInfo(code="7203", name="トヨタ自動車"),
             SecurityInfo(code="6758", name="ソニーグループ"),
         ],
@@ -168,7 +180,7 @@ def test_refresh_public_analysis_snapshot_stages_data_without_market_cap_fields(
     snapshot = refresh_public_analysis_snapshot(
         store=store,
         provider=provider,
-        nikkei_constituents=[
+        ranked_securities=[
             SecurityInfo(code="7203", name="トヨタ自動車"),
             SecurityInfo(code="6758", name="ソニーグループ"),
         ],
@@ -201,7 +213,7 @@ def test_refresh_public_analysis_snapshot_skips_failed_symbols_below_threshold()
     snapshot = refresh_public_analysis_snapshot(
         store=store,
         provider=provider,
-        nikkei_constituents=[
+        ranked_securities=[
             SecurityInfo(code="7203", name="トヨタ自動車"),
             SecurityInfo(code="6758", name="ソニーグループ"),
             SecurityInfo(code="9613", name="NTTデータグループ"),
@@ -229,18 +241,18 @@ def test_refresh_public_analysis_snapshot_raises_when_failures_reach_threshold()
         failing_symbols=failing_symbols,
     )
 
-    nikkei_constituents = [SecurityInfo(code="7203", name="トヨタ自動車")]
+    ranked_securities = [SecurityInfo(code="7203", name="トヨタ自動車")]
     listed_securities = [SecurityInfo(code="7203", name="トヨタ自動車")]
     for rank, code in enumerate(range(9000, 9010), start=2):
         code_text = str(code)
-        nikkei_constituents.append(SecurityInfo(code=code_text, name=code_text))
+        ranked_securities.append(SecurityInfo(code=code_text, name=code_text))
         listed_securities.append(SecurityInfo(code=code_text, name=code_text))
 
     try:
         refresh_public_analysis_snapshot(
             store=store,
             provider=provider,
-            nikkei_constituents=nikkei_constituents,
+            ranked_securities=ranked_securities,
             listed_securities=listed_securities,
             universe_as_of_date="2026-06-08",
             generated_at="2026-06-08T18:00:00+09:00",

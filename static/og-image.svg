@@ -10,7 +10,7 @@
   <text x="88" y="236" fill="#1C2326" font-size="92" font-family="'Inter', 'Segoe UI', sans-serif" font-weight="800">Drawdown</text>
   <text x="88" y="326" fill="#1C2326" font-size="92" font-family="'Inter', 'Segoe UI', sans-serif" font-weight="800">Board</text>
   <text x="88" y="394" fill="#687076" font-size="30" font-family="'Noto Sans JP', 'Segoe UI', sans-serif">
-    <tspan x="88" dy="0">日経225採用銘柄の公開暴落ランキングを掲載。</tspan>
+    <tspan x="88" dy="0">時価総額上位100社の公開暴落ランキングを掲載。</tspan>
     <tspan x="88" dy="44">暴落率、暴落期間、回復度合いを毎営業日更新。</tspan>
   </text>
   <rect x="88" y="470" width="292" height="64" rx="18" fill="#253A5C"/>
