@@ -1022,7 +1022,8 @@ function DrawdownPreviewFigure() {
 }
 
 function PublicAnalysisSection({ publicAnalysis, loading }) {
-  const snapshot = publicAnalysis?.snapshot || null;
+  const publishedSnapshot = publicAnalysis?.snapshot || null;
+  const snapshot = publishedSnapshot?.universe_as_of_date === "2026-09-01" ? publishedSnapshot : null;
   const [sortKey, setSortKey] = useState("current_drawdown_pct");
   const [sortDirection, setSortDirection] = useState("desc");
   const rows = snapshot?.items || [];
@@ -1057,11 +1058,11 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
         "div",
         null,
         h("p", { className: "eyebrow" }, "公開ランキング"),
-        h("h2", null, "日経225採用銘柄の公開暴落ランキング"),
+        h("h2", null, "時価総額上位100社の公開暴落ランキング"),
         h(
           "p",
           { className: "public-analysis-lead" },
-          "日経225構成銘柄のうち、J-Quants無料APIで取得可能な2026-04-01時点のプライム市場上場銘柄を対象に、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
+          "2026年9月1日終値時点の日本株時価総額上位100社を対象に、直近5年の現在進行中の下落と戻りを毎営業日集計します。"
         )
       ),
       h(
@@ -1075,9 +1076,12 @@ function PublicAnalysisSection({ publicAnalysis, loading }) {
     h(
       "div",
       { className: "public-analysis-notes" },
-      h("p", null, "指標の見方: 暴落率は直近5年高値からの下落率、暴落期間はその高値を更新できていない日数、回復度合いは底値から高値までに対する戻り率です。")
+      h("p", null, "指標の見方: 暴落率は直近5年高値からの下落率、暴落期間はその高値を更新できていない日数、回復度合いは底値から高値までに対する戻り率です。"),
+      h("p", null, "対象銘柄: ", h("a", { href: "https://sbi.alpaca-tech.ai/pickup/jp/2026-09-01/evening/2?all=1&sort=1", target: "_blank", rel: "noreferrer" }, "SBI証券の2026年9月1日16:30更新の時価総額順一覧"), "の上位100社。")
     ),
-    publicAnalysis?.message ? h("div", { className: `notice${publicAnalysis?.stale ? " public-analysis-stale" : ""}` }, publicAnalysis.message) : null,
+    publishedSnapshot && !snapshot
+      ? h("div", { className: "notice public-analysis-stale" }, "時価総額上位100社のランキングは集計待ちです。")
+      : publicAnalysis?.message ? h("div", { className: `notice${publicAnalysis?.stale ? " public-analysis-stale" : ""}` }, publicAnalysis.message) : null,
     loading && !snapshot
       ? h("div", { className: "public-analysis-empty" }, "公開ランキングを読み込み中です")
       : !snapshot
@@ -1190,7 +1194,7 @@ function PublicLandingPage({ authError, onEnterApp, publicAnalysis, publicAnalys
             h(
               "p",
               { className: "public-lead" },
-              "選んだ銘柄の株価、drawdown、回復までの日数を並べて比較できる分析ツールです。銘柄名で検索し、期間を選び、下落の深さと戻り方を一画面で確認できます。"
+              "2026年9月1日時点の日本株時価総額上位100社の下落状況を公開中。銘柄名で検索し、株価、drawdown、回復までの日数を一画面で比較できます。"
             )
           ),
           h(DrawdownPreviewFigure)

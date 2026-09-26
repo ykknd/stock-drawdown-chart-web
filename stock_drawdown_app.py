@@ -40,15 +40,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 MARKET_EVENTS_PATH = Path(__file__).parent / "data" / "market_crashes.csv"
 JP_SECURITY_NAMES_PATH = Path(__file__).parent / "data" / "jp_security_names.csv"
 NIKKEI225_CONSTITUENTS_PATH = Path(__file__).parent / "data" / "nikkei225_constituents.csv"
+MARKET_CAP_TOP100_PATH = Path(__file__).parent / "data" / "jpx_market_cap_top100_latest.csv"
+MARKET_CAP_TOP100_AS_OF_DATE = "2026-09-01"
 DEFAULT_PUBLIC_ANALYSIS_LOOKBACK_YEARS = 5
 DEFAULT_PUBLIC_ANALYSIS_PREFIX = "public-analysis"
 DEFAULT_PUBLIC_ANALYSIS_STALE_AFTER_DAYS = 4
-DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE = "2026-04-01"
+DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE = MARKET_CAP_TOP100_AS_OF_DATE
 DEFAULT_PUBLIC_ANALYSIS_MAX_FAILURES = 10
 PUBLIC_ANALYSIS_LIVE_KEY = "live/latest.json"
 SEO_TITLE = "Drawdown Board | 日本株の暴落率・回復度合いを可視化"
 SEO_DESCRIPTION = (
-    "日本株のドローダウン分析ツール。日経225採用銘柄の公開暴落ランキングを掲載し、"
+    "日本株のドローダウン分析ツール。2026年9月1日時点の時価総額上位100社の公開暴落ランキングを掲載し、"
     "暴落率・暴落期間・回復度合いを毎営業日更新。Googleログイン後は個別銘柄の drawdown 分析も利用できます。"
 )
 SEO_OG_IMAGE_PATH = "/og-image.svg"
@@ -886,17 +888,34 @@ def load_nikkei225_constituents(path: Path = NIKKEI225_CONSTITUENTS_PATH) -> lis
     return constituents
 
 
+def load_market_cap_top100(path: Path = MARKET_CAP_TOP100_PATH) -> list[SecurityInfo]:
+    with path.open(newline="", encoding="utf-8-sig") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+    if len(rows) != 100 or [row.get("rank") for row in rows] != [str(rank) for rank in range(1, 101)]:
+        raise ValueError("時価総額上位100社の順位が不正です")
+    if any(row.get("universe_month") != MARKET_CAP_TOP100_AS_OF_DATE[:7] for row in rows):
+        raise ValueError("時価総額上位100社の基準月が不正です")
+    codes = [(row.get("code") or "").strip().upper() for row in rows]
+    if len(set(codes)) != 100 or any(not code for code in codes):
+        raise ValueError("時価総額上位100社の銘柄コードが不正です")
+    return [
+        SecurityInfo(code=code, name=(row.get("name") or "").strip() or get_local_security_name(code) or code)
+        for row, code in zip(rows, codes)
+    ]
+
+
 def build_public_analysis_universe(
-    nikkei_constituents: list[SecurityInfo] | None = None,
+    ranked_securities: list[SecurityInfo] | None = None,
     listed_securities: list[SecurityInfo] | None = None,
     limit: int | None = None,
 ) -> list[SecurityInfo]:
-    nikkei_constituents = nikkei_constituents or load_nikkei225_constituents()
-    listed_securities = listed_securities or []
+    ranked_securities = ranked_securities if ranked_securities is not None else load_market_cap_top100()
+    if listed_securities is None:
+        return ranked_securities[:limit] if limit is not None else ranked_securities
     listed_by_code = {security.code.upper(): security for security in listed_securities}
 
     selected: list[SecurityInfo] = []
-    for security in nikkei_constituents:
+    for security in ranked_securities:
         listed = listed_by_code.get(security.code.upper())
         if listed is None:
             continue
@@ -1515,21 +1534,14 @@ def is_public_analysis_snapshot_stale(
 
 def build_public_analysis_snapshot(
     provider: MarketDataProvider | None = None,
-    nikkei_constituents: list[SecurityInfo] | None = None,
+    ranked_securities: list[SecurityInfo] | None = None,
     listed_securities: list[SecurityInfo] | None = None,
     universe_as_of_date: str | None = None,
-    listing_provider: JQuantsMarketDataProvider | None = None,
     generated_at: str | None = None,
 ) -> PublicAnalysisSnapshot:
     analysis_provider = provider or create_market_data_provider(public_analysis_provider_type())
-    resolved_universe_as_of_date = universe_as_of_date
-    resolved_listed_securities = listed_securities
-    if resolved_listed_securities is None:
-        resolved_universe_as_of_date, resolved_listed_securities = load_public_analysis_listed_securities(
-            provider=listing_provider,
-            as_of_date=DEFAULT_PUBLIC_ANALYSIS_LISTED_SECURITIES_AS_OF_DATE,
-        )
-    securities = build_public_analysis_universe(nikkei_constituents, resolved_listed_securities)
+    resolved_universe_as_of_date = universe_as_of_date or MARKET_CAP_TOP100_AS_OF_DATE
+    securities = build_public_analysis_universe(ranked_securities, listed_securities)
     provider_name = public_analysis_provider_type()
     items: list[PublicAnalysisItem] = []
     failed_symbols: list[str] = []
@@ -1583,18 +1595,16 @@ def build_public_analysis_snapshot(
 def refresh_public_analysis_snapshot(
     store: PublicAnalysisStore | None = None,
     provider: MarketDataProvider | None = None,
-    nikkei_constituents: list[SecurityInfo] | None = None,
+    ranked_securities: list[SecurityInfo] | None = None,
     listed_securities: list[SecurityInfo] | None = None,
     universe_as_of_date: str | None = None,
-    listing_provider: JQuantsMarketDataProvider | None = None,
     generated_at: str | None = None,
 ) -> PublicAnalysisSnapshot:
     snapshot = build_public_analysis_snapshot(
         provider=provider,
-        nikkei_constituents=nikkei_constituents,
+        ranked_securities=ranked_securities,
         listed_securities=listed_securities,
         universe_as_of_date=universe_as_of_date,
-        listing_provider=listing_provider,
         generated_at=generated_at,
     )
     analysis_store = store or create_public_analysis_store()
@@ -1655,13 +1665,13 @@ def render_index_html(request: Request) -> str:
             },
             {
                 "@type": "Dataset",
-                "name": "日経225採用銘柄の公開暴落ランキング",
+                "name": "時価総額上位100社の公開暴落ランキング",
                 "url": canonical_url,
                 "inLanguage": "ja-JP",
                 "description": (
-                    "日経225採用銘柄を対象に、直近5年の暴落率、暴落期間、回復度合いを毎営業日集計した公開ランキングです。"
+                    "2026年9月1日時点の日本株時価総額上位100社を対象に、直近5年の暴落率、暴落期間、回復度合いを毎営業日集計した公開ランキングです。"
                 ),
-                "keywords": ["日本株", "日経225", "暴落率", "ドローダウン", "回復度合い"],
+                "keywords": ["日本株", "時価総額上位100社", "暴落率", "ドローダウン", "回復度合い"],
                 "temporalCoverage": "P5Y",
                 "measurementTechnique": "price drawdown analysis",
             },
