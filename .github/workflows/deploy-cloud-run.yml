@@ -203,12 +203,14 @@ jobs:
 
       - name: Update public analysis Cloud Run jobs
         run: |
-          if [ -z "${{ secrets.JQUANTS_API_KEY }}" ]; then
+          if [ "${{ vars.PUBLIC_ANALYSIS_PROVIDER || 'yfinance' }}" = "jquants" ] && [ -z "${{ secrets.JQUANTS_API_KEY }}" ]; then
             echo "JQUANTS_API_KEY secret is required for public-analysis jobs." >&2
             exit 1
           fi
           JOB_ENV_VARS="PUBLIC_ANALYSIS_BUCKET=${{ vars.PUBLIC_ANALYSIS_BUCKET }},PUBLIC_ANALYSIS_PREFIX=${{ vars.PUBLIC_ANALYSIS_PREFIX || 'public-analysis' }},PUBLIC_ANALYSIS_LOOKBACK_YEARS=${{ vars.PUBLIC_ANALYSIS_LOOKBACK_YEARS || '5' }},PUBLIC_ANALYSIS_PROVIDER=${{ vars.PUBLIC_ANALYSIS_PROVIDER || 'yfinance' }}"
-          JOB_ENV_VARS="$JOB_ENV_VARS,JQUANTS_API_KEY=${{ secrets.JQUANTS_API_KEY }}"
+          if [ -n "${{ secrets.JQUANTS_API_KEY }}" ]; then
+            JOB_ENV_VARS="$JOB_ENV_VARS,JQUANTS_API_KEY=${{ secrets.JQUANTS_API_KEY }}"
+          fi
 
           gcloud run jobs update "${{ vars.PUBLIC_ANALYSIS_REFRESH_JOB }}" \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
@@ -227,3 +229,19 @@ jobs:
             --command python \
             --args stock_drawdown_app.py,publish-public-analysis \
             --set-env-vars "$JOB_ENV_VARS"
+
+      - name: Refresh and publish public analysis after deployment
+        run: |
+          SNAPSHOT_DATE=$(TZ=Asia/Tokyo date +%F)
+          GENERATED_AT=$(TZ=Asia/Tokyo date +%FT%T%:z)
+          gcloud run jobs execute "${{ vars.PUBLIC_ANALYSIS_REFRESH_JOB }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
+            --args "stock_drawdown_app.py,refresh-public-analysis,--generated-at,$GENERATED_AT" \
+            --wait
+
+          gcloud run jobs execute "${{ vars.PUBLIC_ANALYSIS_PUBLISH_JOB }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "${{ vars.REGION || 'asia-northeast1' }}" \
+            --args "stock_drawdown_app.py,publish-public-analysis,--snapshot-date,$SNAPSHOT_DATE" \
+            --wait

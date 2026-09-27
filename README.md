@@ -367,6 +367,8 @@ Optional variables:
 
 For public hosting, do not set `JQUANTS_API_KEY` on the public web Cloud Run service. Users should provide their own J-Quants API key in the web UI. Set `JQUANTS_API_KEY` on the `refresh-public-analysis` job only when it uses J-Quants for price data.
 
+The deployment workflow runs the updated public analysis refresh job, waits for it to succeed, and then runs the publish job. This also initializes the ranking after a weekend deployment or a universe change. Both executions use the same JST snapshot date, even if refresh completes after midnight. Scheduled weekday refresh and publish jobs continue to update the ranking normally.
+
 ## Drawdown Forecasting Preview
 
 `時系列予測(preview)` is an optional daily-only feature backed by a separate private Cloud Run service. The web service keeps its lightweight runtime and calls the forecast service only when the user enables the preview and presses update.
